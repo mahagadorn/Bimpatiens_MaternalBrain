@@ -1,0 +1,497 @@
+---
+title: "B. impatiens Maternal Brain Transcriptomics: gene filtering pre-analyses"
+author: "M.A. Hagadorn"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	warning = TRUE,
+	highlight = TRUE,
+	tidy.opts = list(width.cutoff = 80), tidy = TRUE)
+```
+
+
+
+```{r loadpackages, warning=FALSE, echo=FALSE, message=FALSE, include=FALSE}
+#Library Necessary Packages
+library(edgeR) 
+library(tidyverse)
+library(ggfortify)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+options(stringsAsFactors = FALSE)
+```
+# Rationale and Load Data
+After speaking with KMK on 1/17/2025 I am adding a filtering step prior to all analyses. We are doing so using edgeR built in function *filterByExpr*. I used the following resources and conversations to do so: 1) https://bioconductor.org/packages/release/workflows/vignettes/RnaSeqGeneEdgeRQL/inst/doc/edgeRQL.html, 2) https://support.bioconductor.org/p/107032/ , and 3) https://support.bioconductor.org/p/9157228/.
+
+The first step is to import the data and get a TX matrix set up for filtering.
+```{r loadinthedata}
+#load in the same count matrix used for WGCNA
+GEcounttable <- read.csv2("../../../RNASeqAnalysis/Bimp_MB_GeneCountData.csv", sep=";")
+head(GEcounttable)
+dim(GEcounttable)
+
+#Save OG copy for later
+GEcounttable0 <- GEcounttable
+
+#Read in with samples as column names and gene as column 1
+
+
+#load in the sample mappings
+sampleData <- read.delim("../../../RNASeqSamples_plusexperimentalandmoleculardata.csv", sep=",")
+head(sampleData)
+# Also save a copy for later
+sampleData0 <- sampleData
+
+#subset the data for only some of the columns
+sampleData <- sampleData[,c(1:2,3:6,8,19)]
+head(sampleData)
+```
+
+
+```{r makedesignmatrix}
+#assign as factors
+#below seems to assign FLW as the intercept with 1s for all. This is not right
+#corrected by adding ~0+ to the model
+sampleData$tx_group <- factor(sampleData$tx_group, levels=c("FLW", "FLQ", "MLW", "MLQ", "QLW", "QLQ"))
+
+#create the design matrix based on that model
+design <- model.matrix(~ 0+sampleData$tx_group)
+
+#assign the col colnames
+colnames(design) <- levels(sampleData$tx_group)
+
+#what the matrix looks like
+design
+```
+
+# Filtering
+When appling the *filterByExpr* function, the default parameters are based on count-per-million (CPM). The rule of thumb recommended by the author is "a count of at least 10 in at least some of the libraries before it is considered to be expressed in the study".  
+```{r filterbyexpression}
+#using the design matrix, we filter by expression
+
+#prefilter info
+dim(GEcounttable)
+
+#reformat for genes to be rownames
+rownames(GEcounttable) <- GEcounttable$X
+GEcounttable <- GEcounttable[,-1] #remove gene names column
+
+#filterbyexpresion
+keepergenes <- filterByExpr(GEcounttable, design)
+table(keepergenes)
+
+#new filtered table
+GEcounttable_Filtered <- GEcounttable[keepergenes,]
+```
+
+
+Advise from author Gordon Smyth recommends using default settings in all circumstances: https://support.bioconductor.org/p/9157228/. The one case where it isn't Smyth argues that that was inappropriate.
+```{r saveFilteredGenes}
+write.table(GEcounttable_Filtered, file = "../../Bimp_MB_GeneCountData_FilteredGenes.txt", sep = "")
+write.csv2(GEcounttable_Filtered, file = "../../Bimp_MB_GeneCountData_FilteredGenes.csv")
+```
+
+
+# PCA: explore the dimensionality of the filtered data
+Used the following resource as a guide: https://tavareshugo.github.io/data-carpentry-rnaseq/03_rnaseq_pca.html
+```{r PCASetup}
+# Create a matrix from our table of counts
+#convert to matrix and then transpose
+pca_matrix <- t(as.matrix(GEcounttable_Filtered))
+#Look at the first five genes and samples
+pca_matrix[1:5, 1:5]
+
+pca_matrix0 <- pca_matrix
+
+# Convert matrix to tibble for future use
+as_tibble(pca_matrix, rownames = "sample")
+
+
+# Perform the PCA
+pca <- prcomp(pca_matrix)
+pc_eigenvalues <- pca$sdev^2
+
+
+#to view using ggplot2 create a tibble
+# create a "tibble" manually with 
+# a variable indicating the PC number
+# and a variable with the variances
+pc_eigenvalues <- tibble(PC = factor(1:length(pc_eigenvalues)), 
+                         variance = pc_eigenvalues) %>% 
+  # add a new column with the percent variance
+  mutate(pct = variance/sum(variance)*100) %>% 
+  # add another column with the cumulative variance explained
+  mutate(pct_cum = cumsum(pct))
+
+# print the result
+pc_eigenvalues
+```
+
+To assess the fraction of total variance explained by each PC, we are making a Scree Plot.
+
+```{r PCAScree}
+pc_eigenvalues %>% 
+  ggplot(aes(x = PC)) +
+  geom_col(aes(y = pct)) +
+  geom_line(aes(y = pct_cum, group = 1)) + 
+  geom_point(aes(y = pct_cum)) +
+  labs(x = "Principal component", y = "Fraction variance explained")
+```
+
+
+To assess the fraction of total variance explained by each PC, we are making a Scree Plot.
+
+```{r PCAscoresplot}
+pc_scores <- pca$x
+
+pc_scores <- pc_scores %>% 
+  # convert to a tibble retaining the sample names as a new column
+  as_tibble(rownames = "sample")
+
+# print the result
+pc_scores
+
+
+
+
+#PLOT
+PC_plot1 <- 
+  ggplot(aes(x = PC1, y = PC2), data=pc_scores) +
+  geom_point()
+
+PC_plot1
+
+PC_plot1 + geom_label(aes(label = sample))
+
+
+#Cleaner version
+pc_scores[1,1:3]
+
+PC_plot1 <- 
+  ggplot(aes(x = PC1, y = PC2), data=pc_scores) +
+  geom_point()+
+  annotate("text", x = -330377.2 + 20000, y = 10603.47 + 5000, label = "K23C051", color = "red", size = 4) 
+
+PC_plot1
+```
+
+Sample **K23C051** falls well away from all other samples. This is the same gene considered an outlier in the WGCNA analysis. Per my notes, there are potentially a few issues with this sample. First, this is the only sample that we have from colony K23C, meaning it could be differences at the colony-level. Second, while preparing this sample for dissection, notes indicate that *"tough to get queens head out of LN tube"*. Thus, it may be a RNA degradation issue, though the RINe and qubit values were among the highest.
+
+Since this looks to  be the driver of PC1, I am going to remove this sample and then rerun the PCA to see what we can find.
+
+
+## Removed: *K23C051*
+```{r PCAwithoutCsample}
+#Remove K23C051
+samples <- rownames(pca_matrix0)
+pca_matrix_no51 <- pca_matrix0[!samples %in% c("K23C051"),]
+dim(pca_matrix_no51)
+
+
+
+# Perform the PCA
+pca_no51 <- prcomp(pca_matrix_no51)
+pc_eigenvalues_no51 <- pca_no51$sdev^2
+
+
+#to view using ggplot2 create a tibble
+# create a "tibble" manually with 
+# a variable indicating the PC number
+# and a variable with the variances
+pc_eigenvalues_no51 <- tibble(PC = factor(1:length(pc_eigenvalues_no51)), 
+                         variance = pc_eigenvalues_no51) %>% 
+  # add a new column with the percent variance
+  mutate(pct = variance/sum(variance)*100) %>% 
+  # add another column with the cumulative variance explained
+  mutate(pct_cum = cumsum(pct))
+
+# print the result
+pc_eigenvalues_no51
+
+
+
+####SCREE
+pc_eigenvalues_no51 %>% 
+  ggplot(aes(x = PC)) +
+  geom_col(aes(y = pct)) +
+  geom_line(aes(y = pct_cum, group = 1)) + 
+  geom_point(aes(y = pct_cum)) +
+  labs(x = "Principal component", y = "Fraction variance explained")
+
+
+##PCA plot##
+pc_scores_no51 <- pca_no51$x
+
+
+pc_scores_no51 <- pc_scores_no51 %>% 
+  # convert to a tibble retaining the sample names as a new column
+  as_tibble(rownames = "sample")
+
+# print the result
+pc_scores_no51
+
+#PLOT
+PC_plot2 <- 
+  ggplot(aes(x = PC1, y = PC2), data=pc_scores_no51) +
+  geom_point() +
+  annotate("text", x = 122659 - 8000, y = -68010 + 5000, label = "K23D079", color = "red")
+
+PC_plot2
+
+#PC_plot2 + geom_label(aes(label = sample))
+```
+
+
+
+
+*K23D079* is labeled because this sample was also considered an outlier in the WGCNA analysis. I've kept it here for now. The information I have on this samples is: *"took a while to get head out of tube"*. Thus, again, it could be an RNA degradation issue, though the RINe and qubit values were among the highest of all samples.
+
+I proceeded to looking at PCAs with various factors highlighted.
+\newpage
+
+```{r plotspice, fig.width= 8, fig.height=4.75, echo=FALSE}
+##lets add some details
+sampleData_no51 <- sampleData[-9,]
+
+
+##tx_category x caste
+autoplot(pca_no51, data = sampleData_no51, colour = "tx_category", shape = "caste", size=3.5) +
+   scale_shape_manual(values=c(8,19)) +
+   scale_colour_manual(values=c("forestgreen","coral","purple1"))+
+   scale_fill_manual(values=c("forestgreen","coral","purple1")) +
+   annotate("text", x = 0.59, y = -.34, label = "K23D079", color = "black") +
+   ggtitle("Category x Caste") +
+    theme(plot.title = element_text(hjust = 0.5))
+
+##caste by colony
+autoplot(pca_no51, data = sampleData_no51, colour = "colony", shape = "caste", size=3.5) +
+   scale_shape_manual(values=c(8,19)) +
+   annotate("text", x = 0.59, y = -.34, label = "K23D079", color = "black") +
+   ggtitle("Colony x Caste") +
+    theme(plot.title = element_text(hjust = 0.5))
+
+##caste x age
+autoplot(pca_no51, data = sampleData_no51, colour = "age_at_end", shape = "caste", size=3.5) +
+   scale_shape_manual(values=c(8,19)) +
+   scale_color_continuous(type = "viridis") +
+   annotate("text", x = 0.59, y = -.34, label = "K23D079", color = "black") +
+   ggtitle("Age x Caste") +
+    theme(plot.title = element_text(hjust = 0.5))
+
+##tx_category x age
+autoplot(pca_no51, data = sampleData_no51, colour = "age_at_end", shape = "tx_category", size=3.5) +
+   scale_shape_manual(values=c(15,18, 17)) +
+   scale_color_continuous(type = "viridis") +
+   annotate("text", x = 0.59, y = -.34, label = "K23D079", color = "black") +
+   ggtitle("Age x Category") +
+    theme(plot.title = element_text(hjust = 0.5))
+
+
+```
+
+
+# PC Loading
+Looking at PC loading.
+```{r loadings, echo=FALSE, fig.width= 8, fig.height=8}
+pc_loadings <- pca_no51$rotation
+
+
+pc_loadings <- pc_loadings %>% 
+  as_tibble(rownames = "gene")
+
+
+top_genes <- pc_loadings %>% 
+  # select only the PCs we are interested in
+  select(gene, PC1, PC2) %>%
+  # convert to a "long" format
+  pivot_longer(matches("PC"), names_to = "PC", values_to = "loading") %>% 
+  # for each PC
+  group_by(PC) %>% 
+  # arrange by descending order of loading
+  arrange(desc(abs(loading))) %>% 
+  # take the 10 top rows
+  slice(1:10) %>% 
+  # pull the gene column as a vector
+  pull(gene) %>% 
+  # ensure only unique genes are retained
+  unique()
+
+top_genes
+
+
+top_loadings <- pc_loadings %>% 
+  filter(gene %in% top_genes)
+
+
+ggplot(data = top_loadings) +
+  geom_segment(aes(x = 0, y = 0, xend = PC1, yend = PC2), 
+               arrow = arrow(length = unit(0.1, "in")),
+               color = "brown") +
+  geom_text(aes(x = PC1, y = PC2, label = gene), size = 3) +
+  scale_x_continuous(expand = c(0.05, 0.02))
+
+
+```
+
+
+
+
+## Removed: *K23C051* AND *"K23D079"*
+```{r PCAwithoutCsample2}
+#Remove K23C051
+samples <- rownames(pca_matrix0)
+pca_matrix_no5179 <- pca_matrix0[!samples %in% c("K23C051","K23D079"),]
+dim(pca_matrix_no5179)
+
+
+
+# Perform the PCA
+pca_no5179 <- prcomp(pca_matrix_no5179)
+pc_eigenvalues_no5179 <- pca_no5179$sdev^2
+
+
+#to view using ggplot2 create a tibble
+# create a "tibble" manually with 
+# a variable indicating the PC number
+# and a variable with the variances
+pc_eigenvalues_no5179 <- tibble(PC = factor(1:length(pc_eigenvalues_no5179)), 
+                         variance = pc_eigenvalues_no5179) %>% 
+  # add a new column with the percent variance
+  mutate(pct = variance/sum(variance)*100) %>% 
+  # add another column with the cumulative variance explained
+  mutate(pct_cum = cumsum(pct))
+
+# print the result
+pc_eigenvalues_no5179
+
+
+
+####SCREE
+pc_eigenvalues_no5179 %>% 
+  ggplot(aes(x = PC)) +
+  geom_col(aes(y = pct)) +
+  geom_line(aes(y = pct_cum, group = 1)) + 
+  geom_point(aes(y = pct_cum)) +
+  labs(x = "Principal component", y = "Fraction variance explained")
+
+
+##PCA plot##
+pc_scores_no5179 <- pca_no5179$x
+
+
+pc_scores_no5179 <- pc_scores_no5179 %>% 
+  # convert to a tibble retaining the sample names as a new column
+  as_tibble(rownames = "sample")
+
+# print the result
+pc_scores_no5179
+
+#PLOT
+PC_plot3 <- 
+  ggplot(aes(x = PC1, y = PC2), data=pc_scores_no5179) +
+  geom_point() 
+
+PC_plot3
+
+#PC_plot2 + geom_label(aes(label = sample))
+```
+
+
+```{r plotspice2, fig.width= 8, fig.height=4.75, echo=FALSE}
+##lets add some details
+sampleData_no5179 <- sampleData[-c(9,14),]
+
+
+##tx_category x caste
+autoplot(pca_no5179, data = sampleData_no5179, colour = "tx_category", shape = "caste", size=3.5) +
+   scale_shape_manual(values=c(8,19)) +
+   scale_colour_manual(values=c("forestgreen","coral","purple1"))+
+   scale_fill_manual(values=c("forestgreen","coral","purple1")) +
+   ggtitle("Category x Caste") +
+    theme(plot.title = element_text(hjust = 0.5))
+
+##caste by colony
+autoplot(pca_no5179, data = sampleData_no5179, colour = "colony", shape = "caste", size=3.5) +
+   scale_shape_manual(values=c(8,19)) +
+   ggtitle("Colony x Caste") +
+    theme(plot.title = element_text(hjust = 0.5))
+
+##caste x age
+autoplot(pca_no5179, data = sampleData_no5179, colour = "age_at_end", shape = "caste", size=3.5) +
+   scale_shape_manual(values=c(8,19)) +
+   scale_color_continuous(type = "viridis") +
+   ggtitle("Age x Caste") +
+    theme(plot.title = element_text(hjust = 0.5))
+
+
+##tx_category x age
+autoplot(pca_no5179, data = sampleData_no5179, colour = "age_at_end", shape = "tx_category", size=3.5) +
+   scale_shape_manual(values=c(15,18, 17)) +
+   scale_color_continuous(type = "viridis") +
+   ggtitle("Age x Category") +
+    theme(plot.title = element_text(hjust = 0.5))
+
+
+```
+
+
+# PC Loading
+Looking at PC loading.
+```{r loadings2, echo=FALSE, fig.width= 8, fig.height=8}
+pc_loadings_no5179 <- pca_no5179$rotation
+
+
+pc_loadings_no5179 <- pc_loadings_no5179 %>% 
+  as_tibble(rownames = "gene")
+
+
+top_genes_no5179 <- pc_loadings_no5179 %>% 
+  # select only the PCs we are interested in
+  select(gene, PC1, PC2) %>%
+  # convert to a "long" format
+  pivot_longer(matches("PC"), names_to = "PC", values_to = "loading") %>% 
+  # for each PC
+  group_by(PC) %>% 
+  # arrange by descending order of loading
+  arrange(desc(abs(loading))) %>% 
+  # take the 10 top rows
+  slice(1:10) %>% 
+  # pull the gene column as a vector
+  pull(gene) %>% 
+  # ensure only unique genes are retained
+  unique()
+
+top_genes_no5179
+
+
+top_loadings_no5179 <- pc_loadings_no5179 %>% 
+  filter(gene %in% top_genes_no5179)
+
+
+ggplot(data = top_loadings_no5179) +
+  geom_segment(aes(x = 0, y = 0, xend = PC1, yend = PC2), 
+               arrow = arrow(length = unit(0.1, "in")),
+               color = "brown") +
+  geom_text(aes(x = PC1, y = PC2, label = gene), size = 3) +
+  scale_x_continuous(expand = c(0.05, 0.02))
+
+
+```
+
+```{r saveFilteredGenes_extra}
+
+GEcounttable_Filteredgenes_outliersremoved <- GEcounttable_Filtered %>% select(-"K23C051", -"K23D079")
+
+sampleData_outliersRemoved <- sampleData0[-c(9,14),]
+
+
+
+write.table(sampleData_outliersRemoved, file = "sampleData_OutliersRemoved.txt", sep = "")
+write.csv2(sampleData_outliersRemoved, file = "sampleData_OutliersRemoved.csv", row.names = FALSE)
+```
+

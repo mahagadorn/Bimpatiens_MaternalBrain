@@ -1,0 +1,4791 @@
+---
+title: "B. impatiens Maternal Brain: Gene Set Enrichment Analyses"
+author: "M.A. Hagadorn"
+date: "`r Sys.Date()`"
+output: pdf_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+#school="D:
+#setwd("D:/DesktopDocuments/Documents/PHD/Studies/Bombus_impatiens/Bimpatiens_MaternalBrainGeneExpression/RNASeqAnalysis/BimpMB_RNAanalysis/GSEA")
+
+#home="H:
+setwd("H:/DesktopDocuments/Documents/PHD/Studies/Bombus_impatiens/Bimpatiens_MaternalBrainGeneExpression/RNASeqAnalysis/BimpMB_RNAanalysis/GSEA")
+```
+
+```{r loadpackages, warning=FALSE, echo=FALSE, message=FALSE, include=TRUE}
+#Library Necessary Packages
+library(tidyverse)
+library(lattice)
+library(lintr)
+library(AnnotationDbi)
+library(topGO)
+library(rrvgo)
+library(org.Dm.eg.db)
+library(writexl)
+library(openxlsx)
+library(edgeR)
+library(dplyr)
+library(tidyr)
+library(tibble)
+options(stringsAsFactors = FALSE)
+```
+
+
+```{r sessioninformation, echo=FALSE}
+installed.packages()[names(sessionInfo()$otherPkgs), "Version"]
+```
+
+# Data Preperation for GO Enrichment Analysis
+In 2022, I used the following resource to work through the GO analysis:
+https://bioconductor.org/packages/release/bioc/vignettes/topGO/inst/doc/topGO.pdf. I am building this analysis using the same resource and work through.
+
+## Load in Gene Data
+```{r LoadinGeneData, echo=FALSE}
+#pulling from the document of DEG results. This contains all filtered genes and the genes are the same across the DEG analyses, just with different pairwise results.
+filteredGeneList <- read.csv2(file = "../DEG/DEGFullResults/DEGananalysisResults_FLWMLW.csv", header=TRUE, sep=",")
+rownames(filteredGeneList) <- filteredGeneList$X
+filteredGeneList <- filteredGeneList[,-1]
+
+```
+
+
+## Data preparation
+### Read in Mapping File
+```{r readinannotation}
+#read in the GO annotation file for BIMP
+#GAF file was downloaded from NCBI 2/13/2024 (BIMP 2.2) and modified to include the go ids, terms, and definitions
+#https://www.ncbi.nlm.nih.gov/datasets/genome/?taxon=132113    Selected BIMP_2.2
+gene2mapping <- readMappings("Gene2GoMap_unique.txt", sep = " ", IDsep=",")
+```
+
+
+### 'Universe' Gene List
+```{r allgeneslist}
+#List of all genes
+geneUniverse <- rownames(filteredGeneList) #give list of all gene names
+#This was the filtered Set used in the DEG analysis
+
+length(geneUniverse)
+```
+
+### Build GoData object
+Using the following resource as a guide: https://ucdavis-bioinformatics-training.github.io/2018-June-RNA-Seq-Workshop/friday/enrichment.html
+```{r geneSel.fun}
+#function that returns genes < 0.05 adj pvalue
+topDiffGenes <- function(allScore){
+  return(allScore < 0.05)
+}
+```
+
+
+# GSEA by Pairwise Comparisions 
+
+## Across Castes
+### FLW v FLQ
+#### 'Gene' list for DEGs
+```{r degsgeneslistFLWFLQ}
+DEG.data.FLWFLQ <- read.csv2(file = "../DEG/DEGFullResults/DEGananalysisResults_FLWFLQ.csv", header=TRUE, sep=",")
+rownames(DEG.data.FLWFLQ ) <- DEG.data.FLWFLQ$X
+DEG.data.FLWFLQ  <- DEG.data.FLWFLQ [,-1]
+```
+
+
+I discovered that having NAs in the padj is a problem when running the KS test via: https://www.biostars.org/p/91474/. Removed the NAs to move forward.
+```{r removeNAs_FLWFLQ}
+table(is.na(DEG.data.FLWFLQ$padj))
+NAlist_FLWFLQ <- which(is.na(DEG.data.FLWFLQ$padj))
+rownames(DEG.data.FLWFLQ)[NAlist_FLWFLQ]
+
+#gene list for topgo input
+DEG.genelist.FLWFLQ  <- as.numeric(DEG.data.FLWFLQ$padj)
+names(DEG.genelist.FLWFLQ) <- geneUniverse
+
+
+##NEED TO REMOVE NAs IN PADJ TO PROCEED
+#VERIFY SAME POSITIONS ACROSS ALL PAIRWISE
+FLWFLQ_napos <- which(is.na(DEG.genelist.FLWFLQ), arr.ind = TRUE)
+
+#List of NA genes removed
+FLWFLQ_napos
+
+
+#Create a new data frame to use going forward W/O those padj NAs
+#This is needed for the KS tests
+DEG.genelist.FLWFLQ <- DEG.genelist.FLWFLQ[-FLWFLQ_napos]
+length(DEG.genelist.FLWFLQ)
+
+#get an idea of the top diff genes
+table(topDiffGenes(DEG.genelist.FLWFLQ))
+table(DEG.genelist.FLWFLQ < 0.05)
+
+```
+
+
+#### BP
+```{r BP_DEG}
+DEgenes.FLWFLQ.GO.bp <- new("topGOdata",
+                description = paste("DEG Go", "BP", "FLWFLQ", sep = "_"), 
+                ontology = "BP",
+                allGenes = DEG.genelist.FLWFLQ, # all genes in the "universe" aka our experiment
+                geneSel = topDiffGenes,
+                gene2GO = gene2mapping,
+                annot = annFUN.gene2GO)
+
+
+#Fisher Testing
+DEG.FLWFLQ.bp_result_fisher <- runTest(DEgenes.FLWFLQ.GO.bp, statistic = "fisher", algorithm = "weight01")
+DEG.FLWFLQ.bp_result_fisher
+
+DEG_BP.FLWFLQ.table <- GenTable(DEgenes.FLWFLQ.GO.bp, 
+                                raw.p.value = DEG.FLWFLQ.bp_result_fisher, 
+                                topNodes = 50, 
+                                numChar = 120)
+
+write.csv(DEG_BP.FLWFLQ.table, "Results/ByOntology/FLWFLQ_BPTerms.csv")
+
+```
+
+#### MF
+```{r mf_DEG}
+DEgenes.FLWFLQ.GO.mf <- new("topGOdata",
+                description = paste("DEG Go", "MF", "FLWFLQ", sep = "_"), 
+                ontology = "MF",
+                allGenes = DEG.genelist.FLWFLQ, # all genes in the "universe" aka our experiment
+                geneSel = topDiffGenes,
+                gene2GO = gene2mapping,
+                annot = annFUN.gene2GO)
+
+
+#Fisher Testing
+DEG.FLWFLQ.mf_result_fisher <- runTest(DEgenes.FLWFLQ.GO.mf, statistic = "fisher", algorithm = "weight01")
+DEG.FLWFLQ.mf_result_fisher
+
+DEG_MF.FLWFLQ.table <- GenTable(DEgenes.FLWFLQ.GO.mf, 
+                                raw.p.value = DEG.FLWFLQ.mf_result_fisher, 
+                                topNodes = 50, numChar = 120)
+
+write.csv(DEG_MF.FLWFLQ.table, "Results/ByOntology/FLWFLQ_MFTerms.csv")
+```
+
+
+
+#### CC
+```{r cc_DEG}
+DEgenes.FLWFLQ.GO.cc <- new("topGOdata",
+                description = paste("DEG Go", "CC", "FLWFLQ", sep = "_"), 
+                ontology = "CC",
+                allGenes = DEG.genelist.FLWFLQ, # all genes in the "universe" aka our experiment
+                geneSel = topDiffGenes,
+                gene2GO = gene2mapping,
+                annot = annFUN.gene2GO)
+
+
+#Fisher Testing
+DEG.FLWFLQ.cc_result_fisher <- runTest(DEgenes.FLWFLQ.GO.cc, statistic = "fisher", algorithm = "weight01")
+DEG.FLWFLQ.cc_result_fisher
+
+DEG_CC.FLWFLQ.table <- GenTable(DEgenes.FLWFLQ.GO.cc, 
+                                raw.p.value = DEG.FLWFLQ.cc_result_fisher, 
+                                topNodes = 50,
+                                numChar = 120)
+
+write.csv(DEG_CC.FLWFLQ.table, "Results/ByOntology/FLWFLQ_CCTerms.csv")
+```
+
+
+```{r largetable.DEG_Node=1}
+#ALL
+DEG_BP.FLWFLQ.table <- cbind(DEG_BP.FLWFLQ.table, ontology=rep("BP", length(DEG_BP.FLWFLQ.table$GO.ID)))
+DEG_MF.FLWFLQ.table <- cbind(DEG_MF.FLWFLQ.table, ontology=rep("MF", length(DEG_MF.FLWFLQ.table$GO.ID)))
+DEG_CC.FLWFLQ.table <- cbind(DEG_CC.FLWFLQ.table, ontology=rep("CC", length(DEG_CC.FLWFLQ.table$GO.ID)))
+
+DEG_GOallontology.FLWFLQ <-rbind(DEG_BP.FLWFLQ.table, DEG_MF.FLWFLQ.table, DEG_CC.FLWFLQ.table)
+write.csv(DEG_GOallontology.FLWFLQ, "Results/AllGosOntologyCombined/DEGs_GOallontology_FLWFLQ.csv")
+
+
+#Less than .01
+DEG_BP.FLWFLQ.table.01 <- DEG_BP.FLWFLQ.table[DEG_BP.FLWFLQ.table$raw.p.value < 0.01,]
+DEG_MF.FLWFLQ.table.01 <- DEG_MF.FLWFLQ.table[DEG_MF.FLWFLQ.table$raw.p.value < 0.01,]
+DEG_CC.FLWFLQ.table.01 <- DEG_CC.FLWFLQ.table[DEG_CC.FLWFLQ.table$raw.p.value < 0.01,]
+
+DEG_GOallontology.FLWFLQ.01 <-rbind(DEG_BP.FLWFLQ.table.01, DEG_MF.FLWFLQ.table.01, DEG_CC.FLWFLQ.table.01)
+write.csv(DEG_GOallontology.FLWFLQ.01, "Results/DEGs_GOallontology_FLWFLQ.01.csv")
+```
+
+
+#### Pull out genes for Significant Go terms
+
+
+
+
+### MLW v MLQ
+#### 'Gene' list for DEGs
+```{r degsgeneslistMLWMLQ}
+DEG.data.MLWMLQ <- read.csv2(file = "../DEG/DEGFullResults/DEGananalysisResults_MLWMLQ.csv", header=TRUE, sep=",")
+rownames(DEG.data.MLWMLQ) <- DEG.data.MLWMLQ$X
+DEG.data.MLWMLQ <- DEG.data.MLWMLQ[,-1]
+```
+
+
+I discovered that having NAs in the padj is a problem when running the KS test via: https://www.biostars.org/p/91474/. Removed the NAs to move forward.
+```{r removeNAs_MLWMLQ}
+table(is.na(DEG.data.MLWMLQ$padj))
+NAlist_MLWMLQ <- which(is.na(DEG.data.MLWMLQ$padj))
+rownames(DEG.data.MLWMLQ)[NAlist_MLWMLQ]
+
+#gene list for topgo input
+DEG.genelist.MLWMLQ  <- as.numeric(DEG.data.MLWMLQ$padj)
+names(DEG.genelist.MLWMLQ) <- geneUniverse
+
+
+##NEED TO REMOVE NAs IN PADJ TO PROCEED
+#VERIFY SAME POSITIONS ACROSS ALL PAIRWISE
+MLWMLQ_napos <- which(is.na(DEG.genelist.MLWMLQ), arr.ind = TRUE)
+
+
+
+#Create a new data frame to use going forward W/O those padj NAs
+#This is needed for the KS tests
+DEG.genelist.MLWMLQ <- DEG.genelist.MLWMLQ[-MLWMLQ_napos]
+
+#get an idea of the top diff genes
+table(topDiffGenes(DEG.genelist.MLWMLQ))
+table(DEG.genelist.MLWMLQ < 0.05)
+```
+
+
+#### BP
+```{r BP_DEG_MLWMLQ}
+DEgenes.MLWMLQ.GO.bp <- new("topGOdata",
+                description = paste("DEG Go", "BP", "MLWMLQ", sep = "_"),
+                ontology = "BP",
+                allGenes = DEG.genelist.MLWMLQ, # all genes in the "universe" aka our experiment
+                geneSel = topDiffGenes,
+                gene2GO = gene2mapping,
+                annot = annFUN.gene2GO)
+
+
+#Fisher Testing
+DEG.MLWMLQ.bp_result_fisher <- runTest(DEgenes.MLWMLQ.GO.bp, statistic = "fisher", algorithm = "weight01")
+DEG.MLWMLQ.bp_result_fisher
+
+DEG_BP.MLWMLQ.table <- GenTable(DEgenes.MLWMLQ.GO.bp, 
+                                raw.p.value = DEG.MLWMLQ.bp_result_fisher, 
+                                topNodes = 50, 
+                                numChar = 120)
+
+write.csv(DEG_BP.MLWMLQ.table, "Results/ByOntology/MLWMLQ_BPTerms.csv")
+```
+
+#### MF
+```{r mf_DEG_MLWMLQ}
+DEgenes.MLWMLQ.GO.mf <- new("topGOdata",
+                description = paste("DEG Go", "MF", "MLWMLQ", sep = "_"),
+                ontology = "MF",
+                allGenes = DEG.genelist.MLWMLQ, # all genes in the "universe" aka our experiment
+                geneSel = topDiffGenes,
+                gene2GO = gene2mapping,
+                annot = annFUN.gene2GO)
+
+
+#Fisher Testing
+DEG.MLWMLQ.mf_result_fisher <- runTest(DEgenes.MLWMLQ.GO.mf, statistic = "fisher", algorithm = "weight01")
+DEG.MLWMLQ.mf_result_fisher
+
+DEG_MF.MLWMLQ.table <- GenTable(DEgenes.MLWMLQ.GO.mf, 
+                                raw.p.value = DEG.MLWMLQ.mf_result_fisher, 
+                                topNodes = 50, 
+                                numChar = 120)
+
+write.csv(DEG_MF.MLWMLQ.table, "Results/ByOntology/MLWMLQ_MFTerms.csv")
+```
+
+
+
+#### CC
+```{r cc_DEG_MLWMLQ}
+DEgenes.MLWMLQ.GO.cc <- new("topGOdata",
+                description = paste("DEG Go", "CC", "MLWMLQ", sep = "_"),
+                ontology = "CC",
+                allGenes = DEG.genelist.MLWMLQ, # all genes in the "universe" aka our experiment
+                geneSel = topDiffGenes,
+                gene2GO = gene2mapping,
+                annot = annFUN.gene2GO)
+
+
+#Fisher Testing
+DEG.MLWMLQ.cc_result_fisher <- runTest(DEgenes.MLWMLQ.GO.cc, statistic = "fisher", algorithm = "weight01")
+DEG.MLWMLQ.cc_result_fisher
+
+DEG_CC.MLWMLQ.table <- GenTable(DEgenes.MLWMLQ.GO.cc, 
+                                raw.p.value = DEG.MLWMLQ.cc_result_fisher, 
+                                topNodes = 50, 
+                                numChar = 120)
+
+write.csv(DEG_CC.MLWMLQ.table, "Results/ByOntology/MLWMLQ_CCTerms.csv")
+```
+
+
+```{r MLWMLQlargetable.DEG_Node=1}
+#ALL
+DEG_BP.MLWMLQ.table <- cbind(DEG_BP.MLWMLQ.table, ontology=rep("BP", length(DEG_BP.MLWMLQ.table$GO.ID)))
+DEG_MF.MLWMLQ.table <- cbind(DEG_MF.MLWMLQ.table, ontology=rep("MF", length(DEG_MF.MLWMLQ.table$GO.ID)))
+DEG_CC.MLWMLQ.table <- cbind(DEG_CC.MLWMLQ.table, ontology=rep("CC", length(DEG_CC.MLWMLQ.table$GO.ID)))
+
+DEG_GOallontology.MLWMLQ <-rbind(DEG_BP.MLWMLQ.table, DEG_MF.MLWMLQ.table, DEG_CC.MLWMLQ.table)
+write.csv(DEG_GOallontology.MLWMLQ, "Results/AllGosOntologyCombined/DEGs_GOallontology_MLWMLQ.csv")
+
+
+#Less than .01
+DEG_BP.MLWMLQ.table.01 <- DEG_BP.MLWMLQ.table[DEG_BP.MLWMLQ.table$raw.p.value < 0.01,]
+DEG_MF.MLWMLQ.table.01 <- DEG_MF.MLWMLQ.table[DEG_MF.MLWMLQ.table$raw.p.value < 0.01,]
+DEG_CC.MLWMLQ.table.01 <- DEG_CC.MLWMLQ.table[DEG_CC.MLWMLQ.table$raw.p.value < 0.01,]
+
+DEG_GOallontology.MLWMLQ.01 <-rbind(DEG_BP.MLWMLQ.table.01, DEG_MF.MLWMLQ.table.01, DEG_CC.MLWMLQ.table.01)
+write.csv(DEG_GOallontology.MLWMLQ.01, "Results/DEGs_GOallontology_MLWMLQ.01.csv")
+
+```
+
+
+
+### QLW v QLQ
+#### 'Gene' list for DEGs
+```{r degsgeneslistQLWQLQ}
+DEG.data.QLWQLQ <- read.csv2(file = "../DEG/DEGFullResults/DEGananalysisResults_QLWQLQ.csv", header=TRUE, sep=",")
+rownames(DEG.data.QLWQLQ) <- DEG.data.QLWQLQ$X
+DEG.data.QLWQLQ <- DEG.data.QLWQLQ[,-1]
+```
+
+
+I discovered that having NAs in the padj is a problem when running the _fisher test via: https://www.biostars.org/p/91474/. Removed the NAs to move forward.
+```{r removeNAs_QLWQLQ}
+table(is.na(DEG.data.QLWQLQ$padj))
+NAlist_QLWQLQ <- which(is.na(DEG.data.QLWQLQ$padj))
+rownames(DEG.data.QLWQLQ)[NAlist_QLWQLQ]
+
+#gene list for topgo input
+DEG.genelist.QLWQLQ  <- as.numeric(DEG.data.QLWQLQ$padj)
+names(DEG.genelist.QLWQLQ) <- geneUniverse
+
+
+##NEED TO REMOVE NAs IN PADJ TO PROCEED
+#VERIFY SAME POSITIONS ACROSS ALL PAIRWISE
+QLWQLQ_napos <- which(is.na(DEG.genelist.QLWQLQ), arr.ind = TRUE)
+
+
+
+#Create a new data frame to use going forward W/O those padj NAs
+#This is needed for the _fisher tests
+DEG.genelist.QLWQLQ <- DEG.genelist.QLWQLQ[-QLWQLQ_napos]
+
+table(topDiffGenes(DEG.genelist.QLWQLQ))
+table(DEG.genelist.QLWQLQ < 0.05)
+```
+
+
+#### BP
+```{r BP_DEG_QLWQLQ}
+DEgenes.QLWQLQ.GO.bp <- new("topGOdata",
+                description = paste("DEG Go", "BP", "QLWQLQ", sep = "_"),
+                ontology = "BP",
+                allGenes = DEG.genelist.QLWQLQ, # all genes in the "universe" aka our experiment
+                geneSel = topDiffGenes,
+                gene2GO = gene2mapping,
+                annot = annFUN.gene2GO)
+
+
+#Fisher Testing
+DEG.QLWQLQ.bp_result_fisher <- runTest(DEgenes.QLWQLQ.GO.bp, statistic = "fisher", algorithm = "weight01")
+DEG.QLWQLQ.bp_result_fisher
+
+DEG_BP.QLWQLQ.table <- GenTable(DEgenes.QLWQLQ.GO.bp, 
+                                raw.p.value = DEG.QLWQLQ.bp_result_fisher, 
+                                topNodes = 50, 
+                                numChar = 120)
+
+write.csv(DEG_BP.QLWQLQ.table, "Results/ByOntology/QLWQLQ_BPTerms.csv")
+```
+
+#### MF
+```{r mf_DEG_QLWQLQ}
+DEgenes.QLWQLQ.GO.mf <- new("topGOdata",
+                description = paste("DEG Go", "MF", "QLWQLQ", sep = "_"),
+                ontology = "MF",
+                allGenes = DEG.genelist.QLWQLQ, # all genes in the "universe" aka our experiment
+                geneSel = topDiffGenes,
+                gene2GO = gene2mapping,
+                annot = annFUN.gene2GO)
+
+
+#Fisher Testing
+DEG.QLWQLQ.mf_result_fisher <- runTest(DEgenes.QLWQLQ.GO.mf, statistic = "fisher", algorithm = "weight01")
+DEG.QLWQLQ.mf_result_fisher
+
+DEG_MF.QLWQLQ.table <- GenTable(DEgenes.QLWQLQ.GO.mf, 
+                                raw.p.value = DEG.QLWQLQ.mf_result_fisher, 
+                                topNodes = 50,
+                                numChar = 120)
+
+write.csv(DEG_MF.QLWQLQ.table, "Results/ByOntology/QLWQLQ_MFTerms.csv")
+```
+
+
+
+#### CC
+```{r cc_DEG_QLWQLQ}
+DEgenes.QLWQLQ.GO.cc <- new("topGOdata",
+                description = paste("DEG Go", "CC", "QLWQLQ", sep = "_"),
+                ontology = "CC",
+                allGenes = DEG.genelist.QLWQLQ, # all genes in the "universe" aka our experiment
+                geneSel = topDiffGenes,
+                gene2GO = gene2mapping,
+                annot = annFUN.gene2GO)
+
+
+#Fisher Testing
+DEG.QLWQLQ.cc_result_fisher <- runTest(DEgenes.QLWQLQ.GO.cc, statistic = "fisher", algorithm = "weight01")
+DEG.QLWQLQ.cc_result_fisher
+
+DEG_CC.QLWQLQ.table <- GenTable(DEgenes.QLWQLQ.GO.cc, 
+                                raw.p.value = DEG.QLWQLQ.cc_result_fisher,
+                                topNodes = 50, 
+                                numChar = 120)
+
+write.csv(DEG_CC.QLWQLQ.table, "Results/ByOntology/QLWQLQ_CCTerms.csv")
+```
+
+
+```{r QLWQLQlargetable.DEG_Node=1}
+#ALL
+DEG_BP.QLWQLQ.table <- cbind(DEG_BP.QLWQLQ.table, ontology=rep("BP", length(DEG_BP.QLWQLQ.table$GO.ID)))
+DEG_MF.QLWQLQ.table <- cbind(DEG_MF.QLWQLQ.table, ontology=rep("MF", length(DEG_MF.QLWQLQ.table$GO.ID)))
+DEG_CC.QLWQLQ.table <- cbind(DEG_CC.QLWQLQ.table, ontology=rep("CC", length(DEG_CC.QLWQLQ.table$GO.ID)))
+
+DEG_GOallontology.QLWQLQ <-rbind(DEG_BP.QLWQLQ.table, DEG_MF.QLWQLQ.table, DEG_CC.QLWQLQ.table)
+write.csv(DEG_GOallontology.QLWQLQ, "Results/AllGosOntologyCombined/DEGs_GOallontology_QLWQLQ.csv")
+
+
+#Less than .01
+DEG_BP.QLWQLQ.table.01 <- DEG_BP.QLWQLQ.table[DEG_BP.QLWQLQ.table$raw.p.value < 0.01,]
+DEG_MF.QLWQLQ.table.01 <- DEG_MF.QLWQLQ.table[DEG_MF.QLWQLQ.table$raw.p.value < 0.01,]
+DEG_CC.QLWQLQ.table.01 <- DEG_CC.QLWQLQ.table[DEG_CC.QLWQLQ.table$raw.p.value < 0.01,]
+
+DEG_GOallontology.QLWQLQ.01 <-rbind(DEG_BP.QLWQLQ.table.01, DEG_MF.QLWQLQ.table.01, DEG_CC.QLWQLQ.table.01)
+write.csv(DEG_GOallontology.QLWQLQ.01, "Results/DEGs_GOallontology_QLWQLQ.01.csv")
+```
+
+
+
+
+## Within Castes--WORKERS
+### FLW v MLW
+#### 'Gene' list for DEGs
+```{r degsgeneslistFLWMLW}
+DEG.data.FLWMLW <- read.csv2(file = "../DEG/DEGFullResults/DEGananalysisResults_FLWMLW.csv", header=TRUE, sep=",")
+rownames(DEG.data.FLWMLW) <- DEG.data.FLWMLW$X
+DEG.data.FLWMLW <- DEG.data.FLWMLW[,-1]
+```
+
+
+I discovered that having NAs in the padj is a problem when running the _fisher test via: https://www.biostars.org/p/91474/. Removed the NAs to move forward.
+```{r removeNAs_FLWMLW}
+table(is.na(DEG.data.FLWMLW$padj))
+NAlist_FLWMLW <- which(is.na(DEG.data.FLWMLW$padj))
+rownames(DEG.data.FLWMLW)[NAlist_FLWMLW]
+
+#gene list for topgo input
+DEG.genelist.FLWMLW <- as.numeric(DEG.data.FLWMLW$padj)
+names(DEG.genelist.FLWMLW) <- geneUniverse
+
+
+##NEED TO REMOVE NAs IN PADJ TO PROCEED
+#VERIFY SAME POSITIONS ACROSS ALL PAIRWISE
+FLWMLW_napos <- which(is.na(DEG.genelist.FLWMLW), arr.ind = TRUE)
+
+
+
+#Create a new data frame to use going forward W/O those padj NAs
+#This is needed for the _fisher tests
+DEG.genelist.FLWMLW <- DEG.genelist.FLWMLW[-FLWMLW_napos]
+
+table(topDiffGenes(DEG.genelist.FLWMLW))
+table(DEG.genelist.FLWMLW < 0.05)
+
+```
+
+
+#### BP
+```{r BP_DEG_FLWMLW}
+DEgenes.FLWMLW.GO.bp <- new("topGOdata",
+                description = paste("DEG Go", "BP", "FLWMLW", sep = "_"),
+                ontology = "BP",
+                allGenes = DEG.genelist.FLWMLW, # all genes in the "universe" aka our experiment
+                geneSel = topDiffGenes,
+                gene2GO = gene2mapping,
+                annot = annFUN.gene2GO)
+
+
+#Fisher Testing
+DEG.FLWMLW.bp_result_fisher <- runTest(DEgenes.FLWMLW.GO.bp, statistic = "fisher", algorithm = "weight01")
+DEG.FLWMLW.bp_result_fisher
+
+DEG_BP.FLWMLW.table <- GenTable(DEgenes.FLWMLW.GO.bp, 
+                                raw.p.value = DEG.FLWMLW.bp_result_fisher, 
+                                topNodes = 50, 
+                                numChar = 120)
+
+write.csv(DEG_BP.FLWMLW.table, "Results/ByOntology/FLWMLW_BPTerms.csv")
+```
+
+#### MF
+```{r mf_DEG_FLWMLW}
+DEgenes.FLWMLW.GO.mf <- new("topGOdata",
+                description = paste("DEG Go", "MF", "FLWMLW", sep = "_"),
+                ontology = "MF",
+                allGenes = DEG.genelist.FLWMLW, # all genes in the "universe" aka our experiment
+                geneSel = topDiffGenes,
+                gene2GO = gene2mapping,
+                annot = annFUN.gene2GO)
+
+
+#Fisher Testing
+DEG.FLWMLW.mf_result_fisher <- runTest(DEgenes.FLWMLW.GO.mf, statistic = "fisher", algorithm = "weight01")
+DEG.FLWMLW.mf_result_fisher
+
+DEG_MF.FLWMLW.table <- GenTable(DEgenes.FLWMLW.GO.mf,
+                                raw.p.value = DEG.FLWMLW.mf_result_fisher,
+                                topNodes = 50, 
+                                numChar = 120)
+
+write.csv(DEG_MF.FLWMLW.table, "Results/ByOntology/FLWMLW_MFTerms.csv")
+```
+
+
+
+#### CC
+```{r cc_DEG_FLWMLW}
+DEgenes.FLWMLW.GO.cc <- new("topGOdata",
+                description = paste("DEG Go", "CC", "FLWMLW", sep = "_"),
+                ontology = "CC",
+                allGenes = DEG.genelist.FLWMLW, # all genes in the "universe" aka our experiment
+                geneSel = topDiffGenes,
+                gene2GO = gene2mapping,
+                annot = annFUN.gene2GO)
+
+
+#Fisher Testing
+DEG.FLWMLW.cc_result_fisher <- runTest(DEgenes.FLWMLW.GO.cc, statistic = "fisher", algorithm = "weight01")
+DEG.FLWMLW.cc_result_fisher
+
+DEG_CC.FLWMLW.table <- GenTable(DEgenes.FLWMLW.GO.cc,
+                                raw.p.value = DEG.FLWMLW.cc_result_fisher, 
+                                topNodes = 50,
+                                numChar = 120)
+
+write.csv(DEG_CC.FLWMLW.table, "Results/ByOntology/FLWMLW_CCTerms.csv")
+```
+
+```{r FLWMLWlargetable.DEG_Node=1}
+#ALL
+DEG_BP.FLWMLW.table <- cbind(DEG_BP.FLWMLW.table, ontology=rep("BP", length(DEG_BP.FLWMLW.table$GO.ID)))
+DEG_MF.FLWMLW.table <- cbind(DEG_MF.FLWMLW.table, ontology=rep("MF", length(DEG_MF.FLWMLW.table$GO.ID)))
+DEG_CC.FLWMLW.table <- cbind(DEG_CC.FLWMLW.table, ontology=rep("CC", length(DEG_CC.FLWMLW.table$GO.ID)))
+
+DEG_GOallontology.FLWMLW <-rbind(DEG_BP.FLWMLW.table, DEG_MF.FLWMLW.table, DEG_CC.FLWMLW.table)
+write.csv(DEG_GOallontology.FLWMLW, "Results/AllGosOntologyCombined/DEGs_GOallontology_FLWMLW.csv")
+
+
+#Less than .01
+DEG_BP.FLWMLW.table.01 <- DEG_BP.FLWMLW.table[DEG_BP.FLWMLW.table$raw.p.value < 0.01,]
+DEG_MF.FLWMLW.table.01 <- DEG_MF.FLWMLW.table[DEG_MF.FLWMLW.table$raw.p.value < 0.01,]
+DEG_CC.FLWMLW.table.01 <- DEG_CC.FLWMLW.table[DEG_CC.FLWMLW.table$raw.p.value < 0.01,]
+
+DEG_GOallontology.FLWMLW.01 <-rbind(DEG_BP.FLWMLW.table.01, DEG_MF.FLWMLW.table.01, DEG_CC.FLWMLW.table.01)
+write.csv(DEG_GOallontology.FLWMLW.01, "Results/DEGs_GOallontology_FLWMLW.01.csv")
+```
+
+
+
+### FLW v QLW--NO DEGs
+No analysis conducted because no DEGs.
+
+### MLW v QLW--NO DEGs
+No analysis conducted because no DEGs.
+
+
+
+
+
+
+## Within Castes--QUEENS
+### FLQ v MLQ
+#### 'Gene' list for DEGs
+```{r degsgeneslistFLQMLQ}
+DEG.data.FLQMLQ <- read.csv2(file = "../DEG/DEGFullResults/DEGananalysisResults_FLQMLQ.csv", header=TRUE, sep=",")
+rownames(DEG.data.FLQMLQ) <- DEG.data.FLQMLQ$X
+DEG.data.FLQMLQ <- DEG.data.FLQMLQ[,-1]
+```
+
+
+I discovered that having NAs in the padj is a problem when running the KS test via: https://www.biostars.org/p/91474/. Removed the NAs to move forward.
+```{r removeNAs_FLQMLQ}
+table(is.na(DEG.data.FLQMLQ$padj))
+NAlist_FLQMLQ <- which(is.na(DEG.data.FLQMLQ$padj))
+rownames(DEG.data.FLQMLQ)[NAlist_FLQMLQ]
+
+#gene list for topgo input
+DEG.genelist.FLQMLQ <- as.numeric(DEG.data.FLQMLQ$padj)
+names(DEG.genelist.FLQMLQ) <- geneUniverse
+
+
+##NEED TO REMOVE NAs IN PADJ TO PROCEED
+#VERIFY SAME POSITIONS ACROSS ALL PAIRWISE
+FLQMLQ_napos <- which(is.na(DEG.genelist.FLQMLQ), arr.ind = TRUE)
+
+
+
+#Create a new data frame to use going forward W/O those padj NAs
+#This is needed for the _fisher tests
+DEG.genelist.FLQMLQ <- DEG.genelist.FLQMLQ[-FLQMLQ_napos]
+
+
+table(topDiffGenes(DEG.genelist.FLQMLQ))
+table(DEG.genelist.FLQMLQ < 0.05)
+
+```
+
+
+#### BP
+```{r BP_DEG_FLQMLQ}
+DEgenes.FLQMLQ.GO.bp <- new("topGOdata",
+                description = paste("DEG Go", "BP", "FLQMLQ", sep = "_"),
+                ontology = "BP",
+                allGenes = DEG.genelist.FLQMLQ, # all genes in the "universe" aka our experiment
+                geneSel = topDiffGenes,
+                gene2GO = gene2mapping,
+                annot = annFUN.gene2GO)
+
+
+#Fisher Testing
+DEG.FLQMLQ.bp_result_fisher <- runTest(DEgenes.FLQMLQ.GO.bp, statistic = "fisher", algorithm = "weight01")
+DEG.FLQMLQ.bp_result_fisher
+
+DEG_BP.FLQMLQ.table <- GenTable(DEgenes.FLQMLQ.GO.bp, 
+                                raw.p.value = DEG.FLQMLQ.bp_result_fisher,
+                                topNodes = 50, 
+                                numChar = 120)
+
+write.csv(DEG_BP.FLQMLQ.table, "Results/ByOntology/FLQMLQ_BPTerms.csv")
+```
+
+#### MF
+```{r mf_DEG_FLQMLQ}
+DEgenes.FLQMLQ.GO.mf <- new("topGOdata",
+                description = paste("DEG Go", "MF", "FLQMLQ", sep = "_"),
+                ontology = "MF",
+                allGenes = DEG.genelist.FLQMLQ, # all genes in the "universe" aka our experiment
+                geneSel = topDiffGenes,
+                gene2GO = gene2mapping,
+                annot = annFUN.gene2GO)
+
+
+#Fisher Testing
+DEG.FLQMLQ.mf_result_fisher <- runTest(DEgenes.FLQMLQ.GO.mf, statistic = "fisher", algorithm = "weight01")
+DEG.FLQMLQ.mf_result_fisher
+
+DEG_MF.FLQMLQ.table <- GenTable(DEgenes.FLQMLQ.GO.mf, 
+                                raw.p.value = DEG.FLQMLQ.mf_result_fisher,
+                                topNodes = 50,
+                                numChar = 120)
+
+write.csv(DEG_MF.FLQMLQ.table, "Results/ByOntology/FLQMLQ_MFTerms.csv")
+```
+
+
+
+#### CC
+```{r cc_DEG_FLQMLQ}
+DEgenes.FLQMLQ.GO.cc <- new("topGOdata",
+                description = paste("DEG Go", "CC", "FLQMLQ", sep = "_"),
+                ontology = "CC",
+                allGenes = DEG.genelist.FLQMLQ, # all genes in the "universe" aka our experiment
+                geneSel = topDiffGenes,
+                gene2GO = gene2mapping,
+                annot = annFUN.gene2GO)
+
+
+#Fisher Testing
+DEG.FLQMLQ.cc_result_fisher <- runTest(DEgenes.FLQMLQ.GO.cc, statistic = "fisher", algorithm = "weight01")
+DEG.FLQMLQ.cc_result_fisher
+
+DEG_CC.FLQMLQ.table <- GenTable(DEgenes.FLQMLQ.GO.cc, 
+                                raw.p.value = DEG.FLQMLQ.cc_result_fisher,
+                                topNodes = 50,
+                                numChar = 120)
+
+write.csv(DEG_CC.FLQMLQ.table, "Results/ByOntology/FLQMLQ_CCTerms.csv")
+```
+
+```{r FLQMLQlargetable.DEG_Node=1}
+#ALL
+DEG_BP.FLQMLQ.table <- cbind(DEG_BP.FLQMLQ.table, ontology=rep("BP", length(DEG_BP.FLQMLQ.table$GO.ID)))
+DEG_MF.FLQMLQ.table <- cbind(DEG_MF.FLQMLQ.table, ontology=rep("MF", length(DEG_MF.FLQMLQ.table$GO.ID)))
+DEG_CC.FLQMLQ.table <- cbind(DEG_CC.FLQMLQ.table, ontology=rep("CC", length(DEG_CC.FLQMLQ.table$GO.ID)))
+
+DEG_GOallontology.FLQMLQ <-rbind(DEG_BP.FLQMLQ.table, DEG_MF.FLQMLQ.table, DEG_CC.FLQMLQ.table)
+write.csv(DEG_GOallontology.FLQMLQ, "Results/AllGosOntologyCombined/DEGs_GOallontology_FLQMLQ.csv")
+
+
+#Less than .01
+DEG_BP.FLQMLQ.table.01 <- DEG_BP.FLQMLQ.table[DEG_BP.FLQMLQ.table$raw.p.value < 0.01,]
+DEG_MF.FLQMLQ.table.01 <- DEG_MF.FLQMLQ.table[DEG_MF.FLQMLQ.table$raw.p.value < 0.01,]
+DEG_CC.FLQMLQ.table.01 <- DEG_CC.FLQMLQ.table[DEG_CC.FLQMLQ.table$raw.p.value < 0.01,]
+
+DEG_GOallontology.FLQMLQ.01 <-rbind(DEG_BP.FLQMLQ.table.01, DEG_MF.FLQMLQ.table.01, DEG_CC.FLQMLQ.table.01)
+write.csv(DEG_GOallontology.FLQMLQ.01, "Results/DEGs_GOallontology_FLQMLQ.01.csv")
+```
+
+
+
+### FLQ v QLQ
+#### 'Gene' list for DEGs
+```{r degsgeneslistFLQQLQ}
+DEG.data.FLQQLQ <- read.csv2(file = "../DEG/DEGFullResults/DEGananalysisResults_FLQQLQ.csv", header=TRUE, sep=",")
+rownames(DEG.data.FLQQLQ) <- DEG.data.FLQQLQ$X
+DEG.data.FLQQLQ <- DEG.data.FLQQLQ[,-1]
+```
+
+
+I discovered that having NAs in the padj is a problem when running the _fisher test via: https://www.biostars.org/p/91474/. Removed the NAs to move forward.
+```{r removeNAs_FLQQLQ}
+table(is.na(DEG.data.FLQQLQ$padj))
+NAlist_FLQQLQ <- which(is.na(DEG.data.FLQQLQ$padj))
+rownames(DEG.data.FLQQLQ)[NAlist_FLQQLQ]
+
+#gene list for topgo input
+DEG.genelist.FLQQLQ <- as.numeric(DEG.data.FLQQLQ$padj)
+names(DEG.genelist.FLQQLQ) <- geneUniverse
+
+
+##NEED TO REMOVE NAs IN PADJ TO PROCEED
+#VERIFY SAME POSITIONS ACROSS ALL PAIRWISE
+FLQQLQ_napos <- which(is.na(DEG.genelist.FLQQLQ), arr.ind = TRUE)
+
+
+
+#Create a new data frame to use going forward W/O those padj NAs
+#This is needed for the _fisher tests
+DEG.genelist.FLQQLQ <- DEG.genelist.FLQQLQ[-FLQQLQ_napos]
+
+
+table(topDiffGenes(DEG.genelist.FLQQLQ))
+table(DEG.genelist.FLQQLQ < 0.05)
+```
+
+
+#### BP
+```{r BP_DEG_FLQQLQ}
+DEgenes.FLQQLQ.GO.bp <- new("topGOdata",
+                description = paste("DEG Go", "BP", "FLQQLQ", sep = "_"),
+                ontology = "BP",
+                allGenes = DEG.genelist.FLQQLQ, # all genes in the "universe" aka our experiment
+                geneSel = topDiffGenes,
+                gene2GO = gene2mapping,
+                annot = annFUN.gene2GO)
+
+
+#Fisher Testing
+DEG.FLQQLQ.bp_result_fisher <- runTest(DEgenes.FLQQLQ.GO.bp, statistic = "fisher", algorithm = "weight01")
+DEG.FLQQLQ.bp_result_fisher
+
+DEG_BP.FLQQLQ.table <- GenTable(DEgenes.FLQQLQ.GO.bp,
+                                raw.p.value = DEG.FLQQLQ.bp_result_fisher,
+                                topNodes = 50,
+                                numChar = 120)
+
+write.csv(DEG_BP.FLQQLQ.table, "Results/ByOntology/FLQQLQ_BPTerms.csv")
+```
+
+#### MF
+```{r mf_DEG_FLQQLQ}
+DEgenes.FLQQLQ.GO.mf <- new("topGOdata",
+                description = paste("DEG Go", "MF", "FLQQLQ", sep = "_"),
+                ontology = "MF",
+                allGenes = DEG.genelist.FLQQLQ, # all genes in the "universe" aka our experiment
+                geneSel = topDiffGenes,
+                gene2GO = gene2mapping,
+                annot = annFUN.gene2GO)
+
+
+#Fisher Testing
+DEG.FLQQLQ.mf_result_fisher <- runTest(DEgenes.FLQQLQ.GO.mf, statistic = "fisher", algorithm = "weight01")
+DEG.FLQQLQ.mf_result_fisher
+
+DEG_MF.FLQQLQ.table <- GenTable(DEgenes.FLQQLQ.GO.mf, 
+                                raw.p.value = DEG.FLQQLQ.mf_result_fisher,
+                                topNodes = 50, 
+                                numChar = 120)
+
+write.csv(DEG_MF.FLQQLQ.table, "Results/ByOntology/FLQQLQ_MFTerms.csv")
+```
+
+
+
+#### CC
+```{r cc_DEG_FLQQLQ}
+DEgenes.FLQQLQ.GO.cc <- new("topGOdata",
+                description = paste("DEG Go", "CC", "FLQQLQ", sep = "_"),
+                ontology = "CC",
+                allGenes = DEG.genelist.FLQQLQ, # all genes in the "universe" aka our experiment
+                geneSel = topDiffGenes,
+                gene2GO = gene2mapping,
+                annot = annFUN.gene2GO)
+
+
+#Fisher Testing
+DEG.FLQQLQ.cc_result_fisher <- runTest(DEgenes.FLQQLQ.GO.cc, statistic = "fisher", algorithm = "weight01")
+DEG.FLQQLQ.cc_result_fisher
+
+DEG_CC.FLQQLQ.table <- GenTable(DEgenes.FLQQLQ.GO.cc,
+                                raw.p.value = DEG.FLQQLQ.cc_result_fisher,
+                                topNodes = 50,
+                                numChar = 120)
+
+write.csv(DEG_CC.FLQQLQ.table, "Results/ByOntology/FLQQLQ_CCTerms.csv")
+```
+
+```{r FLQQLQlargetable.DEG_Node=1}
+#ALL
+DEG_BP.FLQQLQ.table <- cbind(DEG_BP.FLQQLQ.table, ontology=rep("BP", length(DEG_BP.FLQQLQ.table$GO.ID)))
+DEG_MF.FLQQLQ.table <- cbind(DEG_MF.FLQQLQ.table, ontology=rep("MF", length(DEG_MF.FLQQLQ.table$GO.ID)))
+DEG_CC.FLQQLQ.table <- cbind(DEG_CC.FLQQLQ.table, ontology=rep("CC", length(DEG_CC.FLQQLQ.table$GO.ID)))
+
+DEG_GOallontology.FLQQLQ <-rbind(DEG_BP.FLQQLQ.table, DEG_MF.FLQQLQ.table, DEG_CC.FLQQLQ.table)
+write.csv(DEG_GOallontology.FLQQLQ, "Results/AllGosOntologyCombined/DEGs_GOallontology_FLQQLQ.csv")
+
+
+#Less than .01
+DEG_BP.FLQQLQ.table.01 <- DEG_BP.FLQQLQ.table[DEG_BP.FLQQLQ.table$raw.p.value < 0.01,]
+DEG_MF.FLQQLQ.table.01 <- DEG_MF.FLQQLQ.table[DEG_MF.FLQQLQ.table$raw.p.value < 0.01,]
+DEG_CC.FLQQLQ.table.01 <- DEG_CC.FLQQLQ.table[DEG_CC.FLQQLQ.table$raw.p.value < 0.01,]
+
+DEG_GOallontology.FLQQLQ.01 <-rbind(DEG_BP.FLQQLQ.table.01, DEG_MF.FLQQLQ.table.01, DEG_CC.FLQQLQ.table.01)
+write.csv(DEG_GOallontology.FLQQLQ.01, "Results/DEGs_GOallontology_FLQQLQ.01.csv")
+```
+
+
+
+
+### MLQ v QLQ
+#### 'Gene' list for DEGs
+```{r degsgeneslistMLQQLQ}
+DEG.data.MLQQLQ <- read.csv2(file = "../DEG/DEGFullResults/DEGananalysisResults_MLQQLQ.csv", header=TRUE, sep=",")
+rownames(DEG.data.MLQQLQ) <- DEG.data.MLQQLQ$X
+DEG.data.MLQQLQ <- DEG.data.MLQQLQ[,-1]
+```
+
+
+I discovered that having NAs in the padj is a problem when running the _fisher test via: https://www.biostars.org/p/91474/. Removed the NAs to move forward.
+```{r removeNAs_MLQQLQ}
+table(is.na(DEG.data.MLQQLQ$padj))
+NAlist_MLQQLQ <- which(is.na(DEG.data.MLQQLQ$padj))
+rownames(DEG.data.MLQQLQ)[NAlist_MLQQLQ]
+
+#gene list for topgo input
+DEG.genelist.MLQQLQ <- as.numeric(DEG.data.MLQQLQ$padj)
+names(DEG.genelist.MLQQLQ) <- geneUniverse
+
+
+##NEED TO REMOVE NAs IN PADJ TO PROCEED
+#VERIFY SAME POSITIONS ACROSS ALL PAIRWISE
+MLQQLQ_napos <- which(is.na(DEG.genelist.MLQQLQ), arr.ind = TRUE)
+
+
+
+#Create a new data frame to use going forward W/O those padj NAs
+#This is needed for the _fisher tests
+DEG.genelist.MLQQLQ <- DEG.genelist.MLQQLQ[-MLQQLQ_napos]
+
+
+table(topDiffGenes(DEG.genelist.MLQQLQ))
+table(DEG.genelist.MLQQLQ < 0.05)
+```
+
+
+#### BP
+```{r BP_DEG_MLQQLQ}
+DEgenes.MLQQLQ.GO.bp <- new("topGOdata",
+                description = paste("DEG Go", "BP", "MLQQLQ", sep = "_"),
+                ontology = "BP",
+                allGenes = DEG.genelist.MLQQLQ, # all genes in the "universe" aka our experiment
+                geneSel = topDiffGenes,
+                gene2GO = gene2mapping,
+                annot = annFUN.gene2GO)
+
+
+#Fisher Testing
+DEG.MLQQLQ.bp_result_fisher <- runTest(DEgenes.MLQQLQ.GO.bp, statistic = "fisher", algorithm = "weight01")
+DEG.MLQQLQ.bp_result_fisher
+
+DEG_BP.MLQQLQ.table <- GenTable(DEgenes.MLQQLQ.GO.bp, 
+                                raw.p.value = DEG.MLQQLQ.bp_result_fisher,
+                                topNodes = 50,
+                                numChar = 120)
+
+write.csv(DEG_BP.MLQQLQ.table, "Results/ByOntology/MLQQLQ_BPTerms.csv")
+```
+
+#### MF
+```{r mf_DEG_MLQQLQ}
+DEgenes.MLQQLQ.GO.mf <- new("topGOdata",
+                description = paste("DEG Go", "MF", "MLQQLQ", sep = "_"),
+                ontology = "MF",
+                allGenes = DEG.genelist.MLQQLQ, # all genes in the "universe" aka our experiment
+                geneSel = topDiffGenes,
+                gene2GO = gene2mapping,
+                annot = annFUN.gene2GO)
+
+
+#Fisher Testing
+DEG.MLQQLQ.mf_result_fisher <- runTest(DEgenes.MLQQLQ.GO.mf, statistic = "fisher", algorithm = "weight01")
+DEG.MLQQLQ.mf_result_fisher
+
+DEG_MF.MLQQLQ.table <- GenTable(DEgenes.MLQQLQ.GO.mf,
+                                raw.p.value = DEG.MLQQLQ.mf_result_fisher,
+                                topNodes =50,
+                                numChar = 120)
+
+write.csv(DEG_MF.MLQQLQ.table, "Results/ByOntology/MLQQLQ_MFTerms.csv")
+```
+
+
+
+#### CC
+```{r cc_DEG_MLQQLQ}
+DEgenes.MLQQLQ.GO.cc <- new("topGOdata",
+                description = paste("DEG Go", "CC", "MLQQLQ", sep = "_"),
+                ontology = "CC",
+                allGenes = DEG.genelist.MLQQLQ, # all genes in the "universe" aka our experiment
+                geneSel = topDiffGenes,
+                gene2GO = gene2mapping,
+                annot = annFUN.gene2GO)
+
+
+#Fisher Testing
+DEG.MLQQLQ.cc_result_fisher <- runTest(DEgenes.MLQQLQ.GO.cc, statistic = "fisher", algorithm = "weight01")
+DEG.MLQQLQ.cc_result_fisher
+
+DEG_CC.MLQQLQ.table <- GenTable(DEgenes.MLQQLQ.GO.cc,
+                                raw.p.value = DEG.MLQQLQ.cc_result_fisher,
+                                topNodes = 50,
+                                numChar = 120)
+
+write.csv(DEG_CC.MLQQLQ.table, "Results/ByOntology/MLQQLQ_CCTerms.csv")
+```
+
+```{r MLQQLQlargetable.DEG_Node=1}
+#ALL
+DEG_BP.MLQQLQ.table <- cbind(DEG_BP.MLQQLQ.table, ontology=rep("BP", length(DEG_BP.MLQQLQ.table$GO.ID)))
+DEG_MF.MLQQLQ.table <- cbind(DEG_MF.MLQQLQ.table, ontology=rep("MF", length(DEG_MF.MLQQLQ.table$GO.ID)))
+DEG_CC.MLQQLQ.table <- cbind(DEG_CC.MLQQLQ.table, ontology=rep("CC", length(DEG_CC.MLQQLQ.table$GO.ID)))
+
+DEG_GOallontology.MLQQLQ <-rbind(DEG_BP.MLQQLQ.table, DEG_MF.MLQQLQ.table, DEG_CC.MLQQLQ.table)
+write.csv(DEG_GOallontology.MLQQLQ, "Results/AllGosOntologyCombined/DEGs_GOallontology_MLQQLQ.csv")
+
+
+#Less than .01
+DEG_BP.MLQQLQ.table.01 <- DEG_BP.MLQQLQ.table[DEG_BP.MLQQLQ.table$raw.p.value < 0.01,]
+DEG_MF.MLQQLQ.table.01 <- DEG_MF.MLQQLQ.table[DEG_MF.MLQQLQ.table$raw.p.value < 0.01,]
+DEG_CC.MLQQLQ.table.01 <- DEG_CC.MLQQLQ.table[DEG_CC.MLQQLQ.table$raw.p.value < 0.01,]
+
+DEG_GOallontology.MLQQLQ.01 <-rbind(DEG_BP.MLQQLQ.table.01, DEG_MF.MLQQLQ.table.01, DEG_CC.MLQQLQ.table.01)
+write.csv(DEG_GOallontology.MLQQLQ.01, "Results/DEGs_GOallontology_MLQQLQ.01.csv")
+```
+
+
+
+
+```{r alluniqueGO}
+##BP##
+# Gather all GO terms across all analyses
+all_GOs_BP <- c(DEG_BP.FLWFLQ.table.01$GO.ID, DEG_BP.MLWMLQ.table.01$GO.ID, DEG_BP.QLWQLQ.table.01$GO.ID, DEG_BP.FLWMLW.table.01$GO.ID, DEG_BP.FLQMLQ.table.01$GO.ID, DEG_BP.FLQQLQ.table.01$GO.ID, DEG_BP.MLQQLQ.table.01$GO.ID)
+
+# Save only the unique GO.IDs
+# We will pull from this to build df
+unique_GO_BP <- unique(all_GOs_BP)
+
+# Make df to store the results using the unique GO IDs.
+#All columns will be this length because it is just T/F later
+GO_df_BP <- data.frame(GOID = unique_GO_BP)
+
+# List of data frame to check aka the results
+#doing this just for P < 0.01
+GOlists <- list(
+  FLWFLQ = DEG_BP.FLWFLQ.table.01, 
+  MLWMLQ = DEG_BP.MLWMLQ.table.01, 
+  QLWQLQ = DEG_BP.QLWQLQ.table.01, 
+  FLWMLW = DEG_BP.FLWMLW.table.01, 
+  FLQMLQ = DEG_BP.FLQMLQ.table.01, 
+  FLQQLQ = DEG_BP.FLQQLQ.table.01, 
+  MLQQLQ = DEG_BP.MLQQLQ.table.01
+)
+
+# Check for each GO.ID in individual dfs from the list of dfs
+#return TRUE/FALSE
+check_for_GOID <- function(df, id) {
+  return(id %in% df$GO.ID)  # Check if GO.ID is present in the current data frame
+}
+
+# Loop through each data frame in GOlists and check for each GO.ID
+for (df_name in names(GOlists)) {
+  # Get the current data frame
+  current_df <- GOlists[[df_name]]
+  
+  # Check if each GO.ID is present in the current data frame and store the result
+  GO_df_BP[[df_name]] <- sapply(GO_df_BP$GOID, function(id) check_for_GOID(current_df, id))
+}
+
+#Modify the results so that only TRUE is shown
+GO_df_BP<- GO_df_BP %>%
+  mutate(across(everything(), ~ ifelse(. == FALSE, "", .)))
+
+print(GO_df_BP)
+
+
+write.csv(GO_df_BP, "Results/AllResults_fisherp01BP.csv")
+
+
+
+##MF##
+# Gather all GO terms across all analyses
+all_GOs_MF <- c(DEG_MF.FLWFLQ.table.01$GO.ID, DEG_MF.MLWMLQ.table.01$GO.ID, DEG_MF.QLWQLQ.table.01$GO.ID, DEG_MF.FLWMLW.table.01$GO.ID, DEG_MF.FLQMLQ.table.01$GO.ID, DEG_MF.FLQQLQ.table.01$GO.ID, DEG_MF.MLQQLQ.table.01$GO.ID)
+
+# Save only the unique GO.IDs
+# We will pull from this to build df
+unique_GO_MF <- unique(all_GOs_MF)
+
+# Make df to store the results using the unique GO IDs.
+#All columns will be this length because it is just T/F later
+GO_df_MF <- data.frame(GOID = unique_GO_MF)
+
+# List of data frame to check aka the results
+#doing this just for P < 0.01
+GOlists_MF <- list(
+  FLWFLQ = DEG_MF.FLWFLQ.table.01, 
+  MLWMLQ = DEG_MF.MLWMLQ.table.01, 
+  QLWQLQ = DEG_MF.QLWQLQ.table.01, 
+  FLWMLW = DEG_MF.FLWMLW.table.01, 
+  FLQMLQ = DEG_MF.FLQMLQ.table.01, 
+  FLQQLQ = DEG_MF.FLQQLQ.table.01, 
+  MLQQLQ = DEG_MF.MLQQLQ.table.01
+)
+
+
+# Loop through each data frame in GOlists and check for each GO.ID
+for (df_name in names(GOlists_MF)) {
+  # Get the current data frame
+  current_df <- GOlists_MF[[df_name]]
+  
+  # Check if each GO.ID is present in the current data frame and store the result
+  GO_df_MF[[df_name]] <- sapply(GO_df_MF$GOID, function(id) check_for_GOID(current_df, id))
+}
+
+#Modify the results so that only TRUE is shown
+GO_df_MF <- GO_df_MF %>%
+  mutate(across(everything(), ~ ifelse(. == FALSE, "", .)))
+
+print(GO_df_MF)
+
+
+write.csv(GO_df_MF, "Results/AllResults_fisherp01MF.csv")
+
+
+
+
+##CC##
+# Gather all GO terms across all analyses
+all_GOs_CC <- c(DEG_CC.FLWFLQ.table.01$GO.ID, DEG_CC.MLWMLQ.table.01$GO.ID, DEG_CC.QLWQLQ.table.01$GO.ID, DEG_CC.FLWMLW.table.01$GO.ID, DEG_CC.FLQMLQ.table.01$GO.ID, DEG_CC.FLQQLQ.table.01$GO.ID, DEG_CC.MLQQLQ.table.01$GO.ID)
+
+# Save only the unique GO.IDs
+# We will pull from this to build df
+unique_GO_CC <- unique(all_GOs_CC)
+
+# Make df to store the results using the unique GO IDs.
+#All columns will be this length because it is just T/F later
+GO_df_CC <- data.frame(GOID = unique_GO_CC)
+
+# List of data frame to check aka the results
+#doing this just for P < 0.01
+GOlists_CC <- list(
+  FLWFLQ = DEG_CC.FLWFLQ.table.01, 
+  MLWMLQ = DEG_CC.MLWMLQ.table.01, 
+  QLWQLQ = DEG_CC.QLWQLQ.table.01, 
+  FLWMLW = DEG_CC.FLWMLW.table.01, 
+  FLQMLQ = DEG_CC.FLQMLQ.table.01, 
+  FLQQLQ = DEG_CC.FLQQLQ.table.01, 
+  MLQQLQ = DEG_CC.MLQQLQ.table.01
+)
+
+
+# Loop through each data frame in GOlists and check for each GO.ID
+for (df_name in names(GOlists_CC)) {
+  # Get the current data frame
+  current_df <- GOlists_CC[[df_name]]
+  
+  # Check if each GO.ID is present in the current data frame and store the result
+  GO_df_CC[[df_name]] <- sapply(GO_df_CC$GOID, function(id) check_for_GOID(current_df, id))
+}
+
+#Modify the results so that only TRUE is shown
+GO_df_CC <- GO_df_CC %>%
+  mutate(across(everything(), ~ ifelse(. == FALSE, "", .)))
+
+print(GO_df_CC)
+
+
+write.csv(GO_df_CC, "Results/AllResults_fisherp01CC.csv")
+write_xlsx(list(BP=GO_df_BP, MF=GO_df_MF, CC=GO_df_CC), path = "Results/AllAnalyses_truesetup.xlsx", col_names = TRUE)
+
+
+# library(xlsx)
+# if(Sys.getenv("JAVA_HOME")!=""){
+#     Sys.setenv(JAVA_HOME="")
+# }
+# library(rJava)
+# write.xlsx(DEG_BP.FLWFLQ.table.01, file="Results/AllAnalyses.csv", sheetName="sheet1", row.names=FALSE)
+# write.xlsx(DEG_BP.MLWMLQ.table.01, file="Results/AllAnalyses.csv", sheetName="sheet2", append=TRUE, row.names=FALSE)
+# write.xlsx(DEG_BP.QLWQLQ.table.01, file="Results/AllAnalyses.csv", sheetName="sheet3", append=TRUE, row.names=FALSE)
+# write.xlsx(DEG_BP.FLWMLW.table.01, file="Results/AllAnalyses.csv", sheetName="sheet4", append=TRUE, row.names=FALSE)
+# write.xlsx(DEG_BP.FLQMLQ.table.01, file="Results/AllAnalyses.csv", sheetName="sheet5", append=TRUE, row.names=FALSE)
+# write.xlsx(DEG_BP.FLQQLQ.table.01, file="Results/AllAnalyses.csv", sheetName="sheet6", append=TRUE, row.names=FALSE)
+# write.xlsx(DEG_BP.MLQQLQ.table.01, file="Results/AllAnalyses.csv", sheetName="sheet7", append=TRUE, row.names=FALSE)
+
+library(writexl)
+
+GOlists_AllOntology <- list(
+  FLWFLQ = DEG_GOallontology.FLWFLQ.01, 
+  MLWMLQ = DEG_GOallontology.MLWMLQ.01, 
+  QLWQLQ = DEG_GOallontology.QLWQLQ.01, 
+  FLWMLW = DEG_GOallontology.FLWMLW.01, 
+  FLQMLQ = DEG_GOallontology.FLQMLQ.01, 
+  FLQQLQ = DEG_GOallontology.FLQQLQ.01, 
+  MLQQLQ = DEG_GOallontology.MLQQLQ.01
+)
+
+write_xlsx(GOlists_AllOntology, path = "Results/AllAnalyses.xlsx", col_names = TRUE)
+
+```
+
+
+```{r adddefs}
+FULLtermsandDefs <- read.csv2(file = "../GSEA/combineGO.csv", header=TRUE, sep=",")
+
+term_def <- FULLtermsandDefs[,c("GO", "term", "definition")]
+
+term_def2 <- unique(term_def, by = "GO")
+colnames(term_def2)[1] <- c("GO.ID")
+
+
+
+DEG_GOallontology.FLWFLQ.01_mergetermdef <- merge(DEG_GOallontology.FLWFLQ.01, term_def2, by = "GO.ID", all.x = TRUE)
+DEG_GOallontology.MLWMLQ.01_mergetermdef <- merge(DEG_GOallontology.MLWMLQ.01, term_def2, by = "GO.ID", all.x = TRUE)
+DEG_GOallontology.QLWQLQ.01_mergetermdef <- merge(DEG_GOallontology.QLWQLQ.01, term_def2, by = "GO.ID", all.x = TRUE)
+DEG_GOallontology.FLWMLW.01_mergetermdef <- merge(DEG_GOallontology.FLWMLW.01, term_def2, by = "GO.ID", all.x = TRUE)
+DEG_GOallontology.FLQMLQ.01_mergetermdef <- merge(DEG_GOallontology.FLQMLQ.01, term_def2, by = "GO.ID", all.x = TRUE)
+DEG_GOallontology.FLQQLQ.01_mergetermdef <- merge(DEG_GOallontology.FLQQLQ.01, term_def2, by = "GO.ID", all.x = TRUE)
+DEG_GOallontology.MLQQLQ.01_mergetermdef <- merge(DEG_GOallontology.MLQQLQ.01, term_def2, by = "GO.ID", all.x = TRUE)
+
+#verifying terms match
+table(DEG_GOallontology.FLWFLQ.01_mergetermdef$Term==DEG_GOallontology.FLWFLQ.01_mergetermdef$term)
+table(DEG_GOallontology.MLWMLQ.01_mergetermdef$Term==DEG_GOallontology.MLWMLQ.01_mergetermdef$term)
+table(DEG_GOallontology.QLWQLQ.01_mergetermdef$Term==DEG_GOallontology.QLWQLQ.01_mergetermdef$term)
+table(DEG_GOallontology.FLWMLW.01_mergetermdef$Term==DEG_GOallontology.FLWMLW.01_mergetermdef$term)
+table(DEG_GOallontology.FLQMLQ.01_mergetermdef$Term==DEG_GOallontology.FLQMLQ.01_mergetermdef$term)
+table(DEG_GOallontology.FLQQLQ.01_mergetermdef$Term==DEG_GOallontology.FLQQLQ.01_mergetermdef$term)
+#one false
+#False is 31; MAH verified and it is okay
+table(DEG_GOallontology.MLQQLQ.01_mergetermdef$Term==DEG_GOallontology.MLQQLQ.01_mergetermdef$term)
+
+
+#All Terms=terms; removing "terms" column
+DEG_GOallontology.FLWFLQ.01_mergetermdef <- DEG_GOallontology.FLWFLQ.01_mergetermdef[,-8]
+DEG_GOallontology.MLWMLQ.01_mergetermdef <- DEG_GOallontology.MLWMLQ.01_mergetermdef[,-8]
+DEG_GOallontology.QLWQLQ.01_mergetermdef <- DEG_GOallontology.QLWQLQ.01_mergetermdef[,-8]
+DEG_GOallontology.FLWMLW.01_mergetermdef <- DEG_GOallontology.FLWMLW.01_mergetermdef[,-8]
+DEG_GOallontology.FLQMLQ.01_mergetermdef <- DEG_GOallontology.FLQMLQ.01_mergetermdef[,-8]
+DEG_GOallontology.FLQQLQ.01_mergetermdef <- DEG_GOallontology.FLQQLQ.01_mergetermdef[,-8]
+DEG_GOallontology.MLQQLQ.01_mergetermdef <- DEG_GOallontology.MLQQLQ.01_mergetermdef[,-8]
+
+#Gsub the < symbols from these when present so I can save as numeric and sort
+DEG_GOallontology.FLWFLQ.01_mergetermdef$raw.p.value <- gsub("< ", "", DEG_GOallontology.FLWFLQ.01_mergetermdef$raw.p.value)
+DEG_GOallontology.FLQMLQ.01_mergetermdef$raw.p.value <- gsub("< ", "", DEG_GOallontology.FLQMLQ.01_mergetermdef$raw.p.value)
+DEG_GOallontology.FLQMLQ.01_mergetermdef$raw.p.value <- gsub("<", "", DEG_GOallontology.FLQMLQ.01_mergetermdef$raw.p.value)
+
+
+
+#make sure P is numeric
+#All Terms=terms; removing "terms" column
+
+as.numeric(DEG_GOallontology.FLWFLQ.01_mergetermdef$raw.p.value)
+as.numeric(DEG_GOallontology.MLWMLQ.01_mergetermdef$raw.p.value)
+as.numeric(DEG_GOallontology.QLWQLQ.01_mergetermdef$raw.p.value)
+as.numeric(DEG_GOallontology.FLWMLW.01_mergetermdef$raw.p.value)
+as.numeric(DEG_GOallontology.FLQMLQ.01_mergetermdef$raw.p.value)
+as.numeric(DEG_GOallontology.FLQQLQ.01_mergetermdef$raw.p.value)
+as.numeric(DEG_GOallontology.MLQQLQ.01_mergetermdef$raw.p.value)
+
+
+#order by group and then ascending pvalue
+# those in sci not will be at the bottom
+DEG_GOallontology.FLWFLQ.01_mergetermdef <- DEG_GOallontology.FLWFLQ.01_mergetermdef %>%
+  arrange(ontology, raw.p.value) 
+DEG_GOallontology.MLWMLQ.01_mergetermdef <- DEG_GOallontology.MLWMLQ.01_mergetermdef %>%
+  arrange(ontology, raw.p.value)
+DEG_GOallontology.QLWQLQ.01_mergetermdef <- DEG_GOallontology.QLWQLQ.01_mergetermdef %>%
+  arrange(ontology, raw.p.value) 
+DEG_GOallontology.FLWMLW.01_mergetermdef <- DEG_GOallontology.FLWMLW.01_mergetermdef %>%
+  arrange(ontology, raw.p.value)
+DEG_GOallontology.FLQMLQ.01_mergetermdef <- DEG_GOallontology.FLQMLQ.01_mergetermdef %>%
+  arrange(ontology, raw.p.value) 
+DEG_GOallontology.FLQQLQ.01_mergetermdef <- DEG_GOallontology.FLQQLQ.01_mergetermdef %>%
+  arrange(ontology, raw.p.value) 
+DEG_GOallontology.MLQQLQ.01_mergetermdef <- DEG_GOallontology.MLQQLQ.01_mergetermdef %>%
+  arrange(ontology, raw.p.value)
+
+
+#write them all to CSV
+write.csv(DEG_GOallontology.FLWFLQ.01_mergetermdef, "Results/TermsDefs/FLWFLQ_fisher1_TD.csv")
+write.csv(DEG_GOallontology.MLWMLQ.01_mergetermdef, "Results/TermsDefs/FLWFLQ_fisher1_TD.csv")
+write.csv(DEG_GOallontology.QLWQLQ.01_mergetermdef, "Results/TermsDefs/FLWFLQ_fisher1_TD.csv")
+write.csv(DEG_GOallontology.FLWMLW.01_mergetermdef, "Results/TermsDefs/FLWFLQ_fisher1_TD.csv")
+write.csv(DEG_GOallontology.FLQMLQ.01_mergetermdef, "Results/TermsDefs/FLWFLQ_fisher1_TD.csv")
+write.csv(DEG_GOallontology.FLQQLQ.01_mergetermdef, "Results/TermsDefs/FLWFLQ_fisher1_TD.csv")
+write.csv(DEG_GOallontology.MLQQLQ.01_mergetermdef, "Results/TermsDefs/FLWFLQ_fisher1_TD.csv")
+
+
+GOlists_AllOntology_TD <- list(
+  FLWFLQ = DEG_GOallontology.FLWFLQ.01_mergetermdef, 
+  MLWMLQ = DEG_GOallontology.MLWMLQ.01_mergetermdef, 
+  QLWQLQ = DEG_GOallontology.QLWQLQ.01_mergetermdef, 
+  FLWMLW = DEG_GOallontology.FLWMLW.01_mergetermdef, 
+  FLQMLQ = DEG_GOallontology.FLQMLQ.01_mergetermdef, 
+  FLQQLQ = DEG_GOallontology.FLQQLQ.01_mergetermdef, 
+  MLQQLQ = DEG_GOallontology.MLQQLQ.01_mergetermdef
+)
+
+
+write_xlsx(GOlists_AllOntology_TD, path = "Results/AllAnalyses_TDincluded.xlsx", col_names = TRUE)
+
+```
+
+
+```{r saveTOPgodata}
+save(DEgenes.FLWFLQ.GO.bp, DEgenes.FLWFLQ.GO.mf, DEgenes.FLWFLQ.GO.cc, DEgenes.MLWMLQ.GO.bp, DEgenes.MLWMLQ.GO.mf, DEgenes.MLWMLQ.GO.cc, DEgenes.QLWQLQ.GO.bp, DEgenes.QLWQLQ.GO.mf, DEgenes.QLWQLQ.GO.cc, DEgenes.FLWMLW.GO.bp, DEgenes.FLWMLW.GO.mf, DEgenes.FLWMLW.GO.cc, DEgenes.FLQMLQ.GO.bp, DEgenes.FLQMLQ.GO.mf, DEgenes.FLQMLQ.GO.cc, DEgenes.FLQQLQ.GO.bp, DEgenes.FLQQLQ.GO.mf, DEgenes.FLQQLQ.GO.cc, DEgenes.MLQQLQ.GO.bp, DEgenes.MLQQLQ.GO.mf, DEgenes.MLQQLQ.GO.cc, file = "Results/GeneTables/TopGOobjects.Rdata")
+
+
+```
+
+
+
+
+
+
+
+
+# Rerun using upregulated and downregulate DEGs
+In this analysis, we want to separate out DEGs into upregulated and downregulated groups prior to running the geneset enrichment analyses.
+
+## Log Fold Change Scores
+```{r upregulatedsplit}
+##no DEGs up for FLWMLW, FLWQLW, MLQQLW, MLQQLQ
+
+
+#FLWFLQ
+sig.FLWFLQ <- subset(DEG.data.FLWFLQ, DEG.data.FLWFLQ$significant=="Significant")
+str(sig.FLWFLQ)
+  ##Make numeric
+  sig.FLWFLQ[ , 1:6] <- lapply(sig.FLWFLQ[ , 1:6], as.numeric)
+DEgenes_UP.FLWFLQ <- rownames(sig.FLWFLQ[sig.FLWFLQ$log2FoldChange > 1.5,])
+
+
+######DEgenes_LFC.FLWFLQ <- rownames(sig.FLWFLQ[sig.FLWFLQ$log2FoldChange > 1.5,])
+
+
+
+#these will be the same moving forward; so making numeric
+
+#MLWMLQ
+sig.MLWMLQ <- subset(DEG.data.MLWMLQ, DEG.data.MLWMLQ$significant=="Significant")
+  ##Make numeric
+  sig.MLWMLQ[ , 1:6] <- lapply(sig.MLWMLQ[ , 1:6], as.numeric)
+DEgenes_UP.MLWMLQ <- rownames(sig.MLWMLQ[sig.MLWMLQ$log2FoldChange > 1.5,])
+
+#QLWQLQ
+sig.QLWQLQ <- subset(DEG.data.QLWQLQ, DEG.data.QLWQLQ$significant=="Significant")
+  ##Make numeric
+  sig.QLWQLQ[ , 1:6] <- lapply(sig.QLWQLQ[ , 1:6], as.numeric)
+DEgenes_UP.QLWQLQ <- rownames(sig.QLWQLQ[sig.QLWQLQ$log2FoldChange > 1.5,])
+
+
+#FLQMLQ
+sig.FLQMLQ <- subset(DEG.data.FLQMLQ, DEG.data.FLQMLQ$significant=="Significant")
+  ##Make numeric
+  sig.FLQMLQ[ , 1:6] <- lapply(sig.FLQMLQ[ , 1:6], as.numeric)
+DEgenes_UP.FLQMLQ <- rownames(sig.FLQMLQ[sig.FLQMLQ$log2FoldChange > 1.5,])
+
+
+
+#FLQQLQ
+sig.FLQQLQ <- subset(DEG.data.FLQQLQ, DEG.data.FLQQLQ$significant=="Significant")
+  ##Make numeric
+  sig.FLQQLQ[ , 1:6] <- lapply(sig.FLQQLQ[ , 1:6], as.numeric)
+DEgenes_UP.FLQQLQ <- rownames(sig.FLQQLQ[sig.FLQQLQ$log2FoldChange > 1.5,])
+
+```
+
+
+## Downregulated genes only
+```{r downregulatedsplit}
+##no DEGs up for FLWQLW, MLQQLW, MLQQLQ  
+#MLQQLQ only has 1 downregulated gene, so not running a go on that.
+
+
+#FLWFLQ
+DEgenes_DOWN.FLWFLQ <- rownames(sig.FLWFLQ[sig.FLWFLQ$log2FoldChange < -1.5,])
+
+#MLWMLQ
+DEgenes_DOWN.MLWMLQ <- rownames(sig.MLWMLQ[sig.MLWMLQ$log2FoldChange < -1.5,])
+
+#QLWQLQ
+DEgenes_DOWN.QLWQLQ <- rownames(sig.QLWQLQ[sig.QLWQLQ$log2FoldChange < -1.5,])
+
+#FLQMLQ
+DEgenes_DOWN.FLQMLQ <- rownames(sig.FLQMLQ[sig.FLQMLQ$log2FoldChange < -1.5,])
+
+#FLQQLQ
+DEgenes_DOWN.FLQQLQ <- rownames(sig.FLQQLQ[sig.FLQQLQ$log2FoldChange < -1.5,])
+
+
+#FLWMLW
+sig.FLWMLW <- subset(DEG.data.FLWMLW, DEG.data.FLWMLW$significant=="Significant")
+  ##Make numeric
+  sig.FLWMLW[ , 1:6] <- lapply(sig.FLWMLW[ , 1:6], as.numeric)
+DEgenes_DOWN.FLWMLW <- rownames(sig.FLWMLW[sig.FLWMLW$log2FoldChange < -1.5,])
+
+```
+
+
+### FLWFLQ
+#### Upregulated
+#### BP
+```{r BP_DEG_FLWFLQ_up}
+GeneList_FLWFLQ_up <- as.integer(geneUniverse %in% DEgenes_UP.FLWFLQ)
+names(GeneList_FLWFLQ_up) <- geneUniverse
+LFCgenes <- function(x) x == 1
+
+#verifying number of upreg genes with LFC < 1.5
+table(GeneList_FLWFLQ_up)
+#verifying the function
+table(LFCgenes(GeneList_FLWFLQ_up))
+
+
+DEgenes.FLWFLQ_UP.GO.bp <- new("topGOdata",
+                description = paste("DEGUpGo", "BP", "FLWFLQ", sep = "_"),
+                ontology = "BP",
+                # all upregulated genes in this comparison, genes of interest = 1
+                allGenes = GeneList_FLWFLQ_up, 
+                geneSelectionFun = LFCgenes,
+                gene2GO = gene2mapping,
+                annot = annFUN.gene2GO)
+
+
+#Run enrichment test using Fisher's exact test
+DEG.FLWFLQ_UP.bp_result_Fisher <- runTest(DEgenes.FLWFLQ_UP.GO.bp, statistic = "fisher", algorithm = "weight01")
+DEG.FLWFLQ_UP.bp_result_Fisher
+
+DEG.UP_BP.FLWFLQ.table <- GenTable(DEgenes.FLWFLQ_UP.GO.bp, 
+                                   raw.p.value = DEG.FLWFLQ_UP.bp_result_Fisher, 
+                                   topNodes = 50, 
+                                   numChar = 120)
+
+write.csv(DEG.UP_BP.FLWFLQ.table, "Results/UpDownSplit/UP/byontology/FLWFLQ_UP_BPTerms.csv")
+```
+
+
+
+
+#### MF
+```{r mf_DEG_FLWFLQ_up}
+DEgenes.FLWFLQ_UP.GO.mf <- new("topGOdata",
+                description = paste("DEG Go", "MF", "FLWFLQ", sep = "_"),
+                ontology = "MF",
+                # all upregulated genes in this comparison, genes of interest = 1
+                allGenes = GeneList_FLWFLQ_up, 
+                geneSelectionFun = LFCgenes,
+                gene2GO = gene2mapping,
+                annot = annFUN.gene2GO)
+
+
+#Fisher Testing
+DEG.FLWFLQ_UP.mf_result_fisher <- runTest(DEgenes.FLWFLQ_UP.GO.mf, statistic = "fisher", algorithm = "weight01")
+DEG.FLWFLQ_UP.mf_result_fisher
+
+DEG.UP_MF.FLWFLQ.table <- GenTable(DEgenes.FLWFLQ_UP.GO.mf, 
+                                   raw.p.value = DEG.FLWFLQ_UP.mf_result_fisher, 
+                                   topNodes = 50, 
+                                   numChar = 120)
+
+write.csv(DEG.UP_MF.FLWFLQ.table, "Results/UpDownSplit/UP/byontology/FLWFLQ_UP_MFTerms.csv")
+```
+
+
+
+#### CC
+```{r cc_DEG_FLWFLQ_up}
+DEgenes.FLWFLQ_UP.GO.cc <- new("topGOdata",
+                description = paste("DEG Go", "CC", "FLWFLQ", sep = "_"),
+                ontology = "CC",
+                # all upregulated genes in this comparison, genes of interest = 1
+                allGenes = GeneList_FLWFLQ_up, 
+                geneSelectionFun = LFCgenes,
+                gene2GO = gene2mapping,
+                annot = annFUN.gene2GO)
+
+
+#Fisher Testing
+DEG.FLWFLQ_UP.cc_result_fisher <- runTest(DEgenes.FLWFLQ_UP.GO.cc, statistic = "fisher", algorithm = "weight01")
+DEG.FLWFLQ_UP.cc_result_fisher
+
+DEG.UP_CC.FLWFLQ.table <- GenTable(DEgenes.FLWFLQ_UP.GO.cc, 
+                                   raw.p.value = DEG.FLWFLQ_UP.cc_result_fisher, 
+                                   topNodes = 50, 
+                                   numChar = 120)
+
+write.csv(DEG.UP_CC.FLWFLQ.table, "Results/UpDownSplit/UP/byontology/FLWFLQ_UP_CCTerms.csv")
+```
+
+```{r FLWFLQlargetable.UP}
+#ALL
+DEG.UP_BP.FLWFLQ.table <- cbind(DEG.UP_BP.FLWFLQ.table, ontology=rep("BP", length(DEG.UP_BP.FLWFLQ.table$GO.ID)))
+DEG.UP_MF.FLWFLQ.table <- cbind(DEG.UP_MF.FLWFLQ.table, ontology=rep("MF", length(DEG.UP_MF.FLWFLQ.table$GO.ID)))
+DEG.UP_CC.FLWFLQ.table <- cbind(DEG.UP_CC.FLWFLQ.table, ontology=rep("CC", length(DEG.UP_CC.FLWFLQ.table$GO.ID)))
+
+DEG_GOallontology.FLWFLQ.UPregulated <-rbind(DEG.UP_BP.FLWFLQ.table, DEG.UP_MF.FLWFLQ.table, DEG.UP_CC.FLWFLQ.table)
+write.csv(DEG_GOallontology.FLWFLQ.UPregulated, "Results/UpDownSplit/UP/ALL/DEGs_GOallontology_FLWFLQ_upregulated.csv")
+
+
+#Less than .01
+DEG.UP_BP.FLWFLQ.table.01 <- DEG.UP_BP.FLWFLQ.table[DEG.UP_BP.FLWFLQ.table$raw.p.value < 0.01,]
+DEG.UP_MF.FLWFLQ.table.01 <- DEG.UP_MF.FLWFLQ.table[DEG.UP_MF.FLWFLQ.table$raw.p.value < 0.01,]
+DEG.UP_CC.FLWFLQ.table.01 <- DEG.UP_CC.FLWFLQ.table[DEG.UP_CC.FLWFLQ.table$raw.p.value < 0.01,]
+
+DEG_GOallontology.FLWFLQ.UPregulated.01 <-rbind(DEG.UP_BP.FLWFLQ.table.01, DEG.UP_MF.FLWFLQ.table.01, DEG.UP_CC.FLWFLQ.table.01)
+write.csv(DEG_GOallontology.FLWFLQ.UPregulated.01, "Results/UpDownSplit/point1percent/DEGs_GOallontology_FLWFLQ_upregulated.01.csv")
+```
+
+
+#### Downregulated
+#### BP
+```{r BP_DEG_FLWFLQ_down}
+GeneList_FLWFLQ_down <- as.integer(geneUniverse %in% DEgenes_DOWN.FLWFLQ)
+names(GeneList_FLWFLQ_down) <- geneUniverse
+
+#verifying number of upreg genes with LFC < -1.5
+table(GeneList_FLWFLQ_down)
+#verifying the function
+table(LFCgenes(GeneList_FLWFLQ_down))
+
+DEgenes.FLWFLQ_DOWN.GO.bp <- new("topGOdata",
+                description = paste("DEGDownGo", "BP", "FLWFLQ", sep = "_"),
+                ontology = "BP",
+                # all downregulated genes in this comparison, genes of interest = 1
+                allGenes = GeneList_FLWFLQ_down, 
+                geneSelectionFun = LFCgenes,
+                gene2GO = gene2mapping,
+                annot = annFUN.gene2GO)
+
+
+#Fisher Testing
+DEG.FLWFLQ_DOWN.bp_result_fisher <- runTest(DEgenes.FLWFLQ_DOWN.GO.bp, statistic = "fisher", algorithm = "weight01")
+DEG.FLWFLQ_DOWN.bp_result_fisher
+
+DEG.DOWN_BP.FLWFLQ.table <- GenTable(DEgenes.FLWFLQ_DOWN.GO.bp, 
+                                     raw.p.value = DEG.FLWFLQ_DOWN.bp_result_fisher, 
+                                     topNodes = 50,
+                                     numChar = 120)
+
+write.csv(DEG.DOWN_BP.FLWFLQ.table, "Results/UpDownSplit/DOWN/byontology/FLWFLQ_DOWN_BPTerms.csv")
+```
+
+
+#### MF
+```{r mf_DEG_FLWFLQ_down}
+DEgenes.FLWFLQ_DOWN.GO.mf <- new("topGOdata",
+                description = paste("DEG Go", "MF", "FLWFLQ", sep = "_"),
+                ontology = "MF",
+                # all downregulated genes in this comparison, genes of interest = 1
+                allGenes = GeneList_FLWFLQ_down, 
+                geneSelectionFun = LFCgenes,
+                gene2GO = gene2mapping,
+                annot = annFUN.gene2GO)
+
+
+#Fisher Testing
+DEG.FLWFLQ_DOWN.mf_result_fisher <- runTest(DEgenes.FLWFLQ_DOWN.GO.mf, statistic = "fisher", algorithm = "weight01")
+DEG.FLWFLQ_DOWN.mf_result_fisher
+
+DEG.DOWN_MF.FLWFLQ.table <- GenTable(DEgenes.FLWFLQ_DOWN.GO.mf, 
+                                     raw.p.value = DEG.FLWFLQ_DOWN.mf_result_fisher, 
+                                     topNodes = 50, 
+                                     numChar = 120)
+
+write.csv(DEG.DOWN_MF.FLWFLQ.table, "Results/UpDownSplit/DOWN/byontology/FLWFLQ_DOWN_MFTerms.csv")
+```
+
+
+
+#### CC
+```{r cc_DEG_FLWFLQ_down}
+DEgenes.FLWFLQ_DOWN.GO.cc <- new("topGOdata",
+                description = paste("DEG Go", "CC", "FLWFLQ", sep = "_"),
+                ontology = "CC",
+                # all downregulated genes in this comparison, genes of interest = 1
+                allGenes = GeneList_FLWFLQ_down, 
+                geneSelectionFun = LFCgenes,
+                gene2GO = gene2mapping,
+                annot = annFUN.gene2GO)
+
+
+#Fisher Testing
+DEG.FLWFLQ_DOWN.cc_result_fisher <- runTest(DEgenes.FLWFLQ_DOWN.GO.cc, statistic = "fisher", algorithm = "weight01")
+DEG.FLWFLQ_DOWN.cc_result_fisher
+
+DEG.DOWN_CC.FLWFLQ.table <- GenTable(DEgenes.FLWFLQ_DOWN.GO.cc, 
+                                     raw.p.value = DEG.FLWFLQ_DOWN.cc_result_fisher, 
+                                     topNodes = 50,
+                                     numChar = 120)
+
+write.csv(DEG.DOWN_CC.FLWFLQ.table, "Results/UpDownSplit/DOWN/byontology/FLWFLQ_DOWN_CCTerms.csv")
+```
+
+```{r FLWFLQlargetable.DOWN}
+#ALL
+DEG.DOWN_BP.FLWFLQ.table <- cbind(DEG.DOWN_BP.FLWFLQ.table, ontology=rep("BP", length(DEG.DOWN_BP.FLWFLQ.table$GO.ID)))
+DEG.DOWN_MF.FLWFLQ.table <- cbind(DEG.DOWN_MF.FLWFLQ.table, ontology=rep("MF", length(DEG.DOWN_MF.FLWFLQ.table$GO.ID)))
+DEG.DOWN_CC.FLWFLQ.table <- cbind(DEG.DOWN_CC.FLWFLQ.table, ontology=rep("CC", length(DEG.DOWN_CC.FLWFLQ.table$GO.ID)))
+
+DEG_GOallontology.FLWFLQ.DOWNregulated <-rbind(DEG.DOWN_BP.FLWFLQ.table, DEG.DOWN_MF.FLWFLQ.table, DEG.DOWN_CC.FLWFLQ.table)
+write.csv(DEG_GOallontology.FLWFLQ.DOWNregulated, "Results/UpDownSplit/DOWN/ALL/DEGs_GOallontology_FLWFLQ_downregulated.csv")
+
+
+#Less than .01
+DEG.DOWN_BP.FLWFLQ.table.01 <- DEG.DOWN_BP.FLWFLQ.table[DEG.DOWN_BP.FLWFLQ.table$raw.p.value < 0.01,]
+DEG.DOWN_MF.FLWFLQ.table.01 <- DEG.DOWN_MF.FLWFLQ.table[DEG.DOWN_MF.FLWFLQ.table$raw.p.value < 0.01,]
+DEG.DOWN_CC.FLWFLQ.table.01 <- DEG.DOWN_CC.FLWFLQ.table[DEG.DOWN_CC.FLWFLQ.table$raw.p.value < 0.01,]
+
+DEG_GOallontology.FLWFLQ.DOWNregulated.01 <-rbind(DEG.DOWN_BP.FLWFLQ.table.01, DEG.DOWN_MF.FLWFLQ.table.01, DEG.DOWN_CC.FLWFLQ.table.01)
+write.csv(DEG_GOallontology.FLWFLQ.DOWNregulated.01, "Results/UpDownSplit/point1percent/DEGs_GOallontology_FLWFLQ_downregulated.01.csv")
+```
+
+
+
+```{r extractgenesforGOs.FLWFLQ}
+#get results table
+results.FLWFLQ <- list(BP.ALL = DEG_BP.FLWFLQ.table,
+  BP.UP = DEG.UP_BP.FLWFLQ.table, 
+  BP.DOWN = DEG.DOWN_BP.FLWFLQ.table,
+  MF.ALL = DEG_MF.FLWFLQ.table,
+  MF.UP = DEG.UP_MF.FLWFLQ.table, 
+  MF.DOWN = DEG.DOWN_MF.FLWFLQ.table,
+  CC.ALL = DEG_CC.FLWFLQ.table,
+  CC.UP = DEG.UP_CC.FLWFLQ.table, 
+  CC.DOWN = DEG.DOWN_CC.FLWFLQ.table
+)
+  
+#get a list of the godata objects
+GOdata_list.FLWFLQ <- list(
+  BP.ALL = DEgenes.FLWFLQ.GO.bp,
+  BP.UP = DEgenes.FLWFLQ_UP.GO.bp, 
+  BP.DOWN = DEgenes.FLWFLQ_DOWN.GO.bp,
+  MF.ALL = DEgenes.FLWFLQ.GO.mf,
+  MF.UP = DEgenes.FLWFLQ_UP.GO.mf, 
+  MF.DOWN = DEgenes.FLWFLQ_DOWN.GO.mf,
+  CC.ALL = DEgenes.FLWFLQ.GO.cc,
+  CC.UP = DEgenes.FLWFLQ_UP.GO.cc, 
+  CC.DOWN = DEgenes.FLWFLQ_DOWN.GO.cc
+)
+
+#geneID Extraction
+
+# Step 1: Filter significant GO terms (p < 0.01), handling scientific notation
+sig.terms_list.FLWFLQ <- lapply(results.FLWFLQ, function(tbl) {
+    # Ensure p-values are numeric (handles cases where they are character strings like "1.2e-5")
+    pvals <- as.numeric(tbl$raw.p.value)
+    
+    # Return GO.IDs with p < 0.01
+    tbl$GO.ID[which(pvals < 0.01)]
+})
+
+# Step 2: Extract significant genes per GO term from each GOdata object
+significant_genes_per_GO.FLWFLQ <- mapply(function(GOdata, go_ids) {
+    # Get genes associated with each GO term
+    genes_per_GO <- genesInTerm(object = GOdata, whichGO = go_ids)
+    # Get significant genes from the GOdata object
+    sigGenesSet <- sigGenes(GOdata)
+    # Intersect genes in each GO term with the significant genes
+    lapply(genes_per_GO, function(genes) intersect(genes, sigGenesSet))
+  },
+GOdata_list.FLWFLQ,
+sig.terms_list.FLWFLQ,
+SIMPLIFY = FALSE)
+
+
+# #flatten that B
+# # Flatten the nested list into a tidy data frame
+# df_significant_genes_per_GO <- map2_df(
+#   significant_genes_per_GO,
+#   names(significant_genes_per_GO),  # Corresponds to BP.ALL, BP.UP, BP.DOWN
+#   function(go_list, group_name) {
+#     tibble(
+#       GO.ID = names(go_list),
+#       significant_genes = go_list,
+#       group = group_name
+#     ) %>%
+#     unnest_longer(significant_genes)  # Expands each gene to its own row
+#   }
+# )
+# 
+# 
+# 
+# write_xlsx(df_significant_genes_per_GO, "Results/GenesPerGO/significant_genes_per_GO_FLWFLQ.BP.xlsx")
+
+
+
+
+#plus terms
+# Make a named vector of GO terms (Term names), per group
+go_term_names_list.FLWFLQ <- lapply(results.FLWFLQ, function(tbl) {
+  setNames(tbl$Term, tbl$GO.ID)
+})
+
+# tidy_gene_tables <- map2(
+#   significant_genes_per_GO,
+#   names(significant_genes_per_GO),
+#   function(go_list, group_name) {
+#     # Create base table with GO.ID and genes
+#     df <- tibble(
+#       GO.ID = names(go_list),
+#       significant_genes = go_list
+#     ) %>%
+#     unnest_longer(significant_genes)
+# 
+#     # Add GO term names using the appropriate lookup table
+#     df$Term <- go_term_names_list[[group_name]][df$GO.ID]
+# 
+#     # Add group label
+#     df$Group <- group_name
+# 
+#     # Reorder columns using base R or dplyr
+#     df <- df[, c("Group", "GO.ID", "Term", "significant_genes")]  # <- fixed here
+# 
+#     return(df)
+#   }
+# )
+
+
+
+
+
+####This is the function that will be used across PW comparisons
+
+write_sig_genes_per_GO_to_excel <- function(sig_gene_list, go_term_name_list, output_file) {
+  
+  # Build a list of tidy data frames (one per group/sheet)
+  tidy_gene_tables <- purrr::map2(
+    sig_gene_list,
+    names(sig_gene_list),
+    function(go_list, group_name) {
+      # Create base table with GO.ID and genes
+      df <- tibble(
+        GO.ID = names(go_list),
+        significant_genes = go_list
+      ) %>%
+      unnest_longer(significant_genes)
+      
+      # Add GO term names from lookup
+      df$Term <- go_term_name_list[[group_name]][df$GO.ID]
+      
+      # Add group and ontology type
+      df$Group <- group_name
+      df$Ontology <- toupper(stringr::str_extract(group_name, "^[A-Za-z]+"))  # Extract BP, MF, CC
+
+      # Reorder columns
+      df <- df[, c("Ontology", "Group", "GO.ID", "Term", "significant_genes")]
+      
+      return(df)
+    }
+  )
+  
+  # Create Excel workbook
+  wb <- createWorkbook()
+  
+  # Add a sheet for each group
+  purrr::walk2(tidy_gene_tables, names(tidy_gene_tables), function(df, sheet_name) {
+    addWorksheet(wb, sheet_name)
+    writeData(wb, sheet = sheet_name, df)
+  })
+  
+  # Save workbook
+  saveWorkbook(wb, output_file, overwrite = TRUE)
+}
+
+
+write_sig_genes_per_GO_to_excel(
+  sig_gene_list = significant_genes_per_GO.FLWFLQ,
+  go_term_name_list = go_term_names_list.FLWFLQ,
+  output_file = "Results/GenesPerGO/FLWFLQ_significant_genes_per_GO.xlsx"
+)
+
+
+
+#Verify the overlap of genes between all, up, down
+#BP
+genesFLWFLQ_BP_ALL <- unique(unlist(significant_genes_per_GO.FLWFLQ$BP.ALL))
+genesFLWFLQ_BP_UP <- unique(unlist(significant_genes_per_GO.FLWFLQ$BP.UP))
+genesFLWFLQ_BP_DOWN <- unique(unlist(significant_genes_per_GO.FLWFLQ$BP.DOWN))
+
+  #OVERLAP
+  intersect(genesFLWFLQ_BP_ALL, genesFLWFLQ_BP_UP)
+  table(genesFLWFLQ_BP_UP %in% genesFLWFLQ_BP_ALL)
+  table(genesFLWFLQ_BP_UP %in% names(DEG.genelist.FLWFLQ))
+  
+  intersect(genesFLWFLQ_BP_ALL, genesFLWFLQ_BP_DOWN)
+  table(genesFLWFLQ_BP_DOWN %in% genesFLWFLQ_BP_ALL)
+  table(genesFLWFLQ_BP_DOWN %in% names(DEG.genelist.FLWFLQ))
+
+
+
+#MF
+genesFLWFLQ_MF_ALL <- unique(unlist(significant_genes_per_GO.FLWFLQ$MF.ALL))
+genesFLWFLQ_MF_UP <- unique(unlist(significant_genes_per_GO.FLWFLQ$MF.UP)) #no ups
+genesFLWFLQ_MF_DOWN <- unique(unlist(significant_genes_per_GO.FLWFLQ$MF.DOWN))
+
+  #OVERLAP
+  intersect(genesFLWFLQ_MF_ALL, genesFLWFLQ_MF_UP)
+  table(genesFLWFLQ_MF_UP %in% genesFLWFLQ_MF_ALL)
+  table(genesFLWFLQ_MF_UP %in% names(DEG.genelist.FLWFLQ))
+  
+  intersect(genesFLWFLQ_MF_ALL, genesFLWFLQ_MF_DOWN)
+  table(genesFLWFLQ_MF_DOWN %in% genesFLWFLQ_MF_ALL)
+  table(genesFLWFLQ_MF_DOWN %in% names(DEG.genelist.FLWFLQ))
+
+
+
+#CC
+genesFLWFLQ_CC_ALL <- unique(unlist(significant_genes_per_GO.FLWFLQ$CC.ALL))
+genesFLWFLQ_CC_UP <- unique(unlist(significant_genes_per_GO.FLWFLQ$CC.UP))
+genesFLWFLQ_CC_DOWN <- unique(unlist(significant_genes_per_GO.FLWFLQ$CC.DOWN))
+
+
+  #OVERLAP
+  intersect(genesFLWFLQ_CC_ALL, genesFLWFLQ_CC_UP)
+  table(genesFLWFLQ_CC_UP %in% genesFLWFLQ_CC_ALL)
+  table(genesFLWFLQ_CC_UP %in% names(DEG.genelist.FLWFLQ))
+  
+  intersect(genesFLWFLQ_CC_ALL, genesFLWFLQ_CC_DOWN)
+  table(genesFLWFLQ_CC_DOWN %in% genesFLWFLQ_CC_ALL)
+  table(genesFLWFLQ_CC_DOWN %in% names(DEG.genelist.FLWFLQ))
+
+
+```
+
+
+
+### MLWMLQ
+#### Upregulated
+
+#### BP
+```{r BP_DEG_MLWMLQ_up}
+GeneList_MLWMLQ_up <- as.integer(geneUniverse %in% DEgenes_UP.MLWMLQ)
+names(GeneList_MLWMLQ_up) <- geneUniverse
+LFCgenes <- function(x) x == 1
+
+#verifying number of upreg genes with LFC < 1.5
+table(GeneList_MLWMLQ_up)
+#verifying the function
+table(LFCgenes(GeneList_MLWMLQ_up))
+
+
+DEgenes.MLWMLQ_UP.GO.bp <- new("topGOdata",
+                description = paste("DEGUpGo", "BP", "MLWMLQ", sep = "_"),
+                ontology = "BP",
+                # all upregulated genes in this comparison, genes of interest = 1
+                allGenes = GeneList_MLWMLQ_up, 
+                geneSelectionFun = LFCgenes,
+                gene2GO = gene2mapping,
+                annot = annFUN.gene2GO)
+
+
+#Run enrichment test using Fisher's exact test
+DEG.MLWMLQ_UP.bp_result_Fisher <- runTest(DEgenes.MLWMLQ_UP.GO.bp, statistic = "fisher", algorithm = "weight01")
+DEG.MLWMLQ_UP.bp_result_Fisher
+
+DEG.UP_BP.MLWMLQ.table <- GenTable(DEgenes.MLWMLQ_UP.GO.bp, 
+                                   raw.p.value = DEG.MLWMLQ_UP.bp_result_Fisher, 
+                                   topNodes = 50, 
+                                   numChar = 120)
+
+write.csv(DEG.UP_BP.MLWMLQ.table, "Results/UpDownSplit/UP/byontology/MLWMLQ_UP_BPTerms.csv")
+```
+
+
+
+
+#### MF
+```{r mf_DEG_MLWMLQ_up}
+DEgenes.MLWMLQ_UP.GO.mf <- new("topGOdata",
+                description = paste("DEG Go", "MF", "MLWMLQ", sep = "_"),
+                ontology = "MF",
+                # all upregulated genes in this comparison, genes of interest = 1
+                allGenes = GeneList_MLWMLQ_up, 
+                geneSelectionFun = LFCgenes,
+                gene2GO = gene2mapping,
+                annot = annFUN.gene2GO)
+
+
+#Fisher Testing
+DEG.MLWMLQ_UP.mf_result_fisher <- runTest(DEgenes.MLWMLQ_UP.GO.mf, statistic = "fisher", algorithm = "weight01")
+DEG.MLWMLQ_UP.mf_result_fisher
+
+DEG.UP_MF.MLWMLQ.table <- GenTable(DEgenes.MLWMLQ_UP.GO.mf, 
+                                   raw.p.value = DEG.MLWMLQ_UP.mf_result_fisher, 
+                                   topNodes = 50, 
+                                   numChar = 120)
+
+write.csv(DEG.UP_MF.MLWMLQ.table, "Results/UpDownSplit/UP/byontology/MLWMLQ_UP_MFTerms.csv")
+```
+
+
+
+#### CC
+```{r cc_DEG_MLWMLQ_up}
+DEgenes.MLWMLQ_UP.GO.cc <- new("topGOdata",
+                description = paste("DEG Go", "CC", "MLWMLQ", sep = "_"),
+                ontology = "CC",
+                # all upregulated genes in this comparison, genes of interest = 1
+                allGenes = GeneList_MLWMLQ_up, 
+                geneSelectionFun = LFCgenes,
+                gene2GO = gene2mapping,
+                annot = annFUN.gene2GO)
+
+
+#Fisher Testing
+DEG.MLWMLQ_UP.cc_result_fisher <- runTest(DEgenes.MLWMLQ_UP.GO.cc, statistic = "fisher", algorithm = "weight01")
+DEG.MLWMLQ_UP.cc_result_fisher
+
+DEG.UP_CC.MLWMLQ.table <- GenTable(DEgenes.MLWMLQ_UP.GO.cc, 
+                                   raw.p.value = DEG.MLWMLQ_UP.cc_result_fisher, 
+                                   topNodes = 50, 
+                                   numChar = 120)
+
+write.csv(DEG.UP_CC.MLWMLQ.table, "Results/UpDownSplit/UP/byontology/MLWMLQ_UP_CCTerms.csv")
+```
+
+```{r MLWMLQlargetable.UP}
+#ALL
+DEG.UP_BP.MLWMLQ.table <- cbind(DEG.UP_BP.MLWMLQ.table, ontology=rep("BP", length(DEG.UP_BP.MLWMLQ.table$GO.ID)))
+DEG.UP_MF.MLWMLQ.table <- cbind(DEG.UP_MF.MLWMLQ.table, ontology=rep("MF", length(DEG.UP_MF.MLWMLQ.table$GO.ID)))
+DEG.UP_CC.MLWMLQ.table <- cbind(DEG.UP_CC.MLWMLQ.table, ontology=rep("CC", length(DEG.UP_CC.MLWMLQ.table$GO.ID)))
+
+DEG_GOallontology.MLWMLQ.UPregulated <-rbind(DEG.UP_BP.MLWMLQ.table, DEG.UP_MF.MLWMLQ.table, DEG.UP_CC.MLWMLQ.table)
+write.csv(DEG_GOallontology.MLWMLQ.UPregulated, "Results/UpDownSplit/UP/ALL/DEGs_GOallontology_MLWMLQ_upregulated.csv")
+
+
+#Less than .01
+DEG.UP_BP.MLWMLQ.table.01 <- DEG.UP_BP.MLWMLQ.table[DEG.UP_BP.MLWMLQ.table$raw.p.value < 0.01,]
+DEG.UP_MF.MLWMLQ.table.01 <- DEG.UP_MF.MLWMLQ.table[DEG.UP_MF.MLWMLQ.table$raw.p.value < 0.01,]
+DEG.UP_CC.MLWMLQ.table.01 <- DEG.UP_CC.MLWMLQ.table[DEG.UP_CC.MLWMLQ.table$raw.p.value < 0.01,]
+
+DEG_GOallontology.MLWMLQ.UPregulated.01 <-rbind(DEG.UP_BP.MLWMLQ.table.01, DEG.UP_MF.MLWMLQ.table.01, DEG.UP_CC.MLWMLQ.table.01)
+write.csv(DEG_GOallontology.MLWMLQ.UPregulated.01, "Results/UpDownSplit/point1percent/DEGs_GOallontology_MLWMLQ_upregulated.01.csv")
+```
+
+
+#### Downregulated
+#### BP
+```{r BP_DEG_MLWMLQ_down}
+GeneList_MLWMLQ_down <- as.integer(geneUniverse %in% DEgenes_DOWN.MLWMLQ)
+names(GeneList_MLWMLQ_down) <- geneUniverse
+
+#verifying number of upreg genes with LFC < -1.5
+table(GeneList_MLWMLQ_down)
+#verifying the function
+table(LFCgenes(GeneList_MLWMLQ_down))
+
+DEgenes.MLWMLQ_DOWN.GO.bp <- new("topGOdata",
+                description = paste("DEGDownGo", "BP", "MLWMLQ", sep = "_"),
+                ontology = "BP",
+                # all downregulated genes in this comparison, genes of interest = 1
+                allGenes = GeneList_MLWMLQ_down, 
+                geneSelectionFun = LFCgenes,
+                gene2GO = gene2mapping,
+                annot = annFUN.gene2GO)
+
+
+#Fisher Testing
+DEG.MLWMLQ_DOWN.bp_result_fisher <- runTest(DEgenes.MLWMLQ_DOWN.GO.bp, statistic = "fisher", algorithm = "weight01")
+DEG.MLWMLQ_DOWN.bp_result_fisher
+
+DEG.DOWN_BP.MLWMLQ.table <- GenTable(DEgenes.MLWMLQ_DOWN.GO.bp, 
+                                     raw.p.value = DEG.MLWMLQ_DOWN.bp_result_fisher, 
+                                     topNodes = 50,
+                                     numChar = 120)
+
+write.csv(DEG.DOWN_BP.MLWMLQ.table, "Results/UpDownSplit/DOWN/byontology/MLWMLQ_DOWN_BPTerms.csv")
+```
+
+
+#### MF
+```{r mf_DEG_MLWMLQ_down}
+DEgenes.MLWMLQ_DOWN.GO.mf <- new("topGOdata",
+                description = paste("DEG Go", "MF", "MLWMLQ", sep = "_"),
+                ontology = "MF",
+                # all downregulated genes in this comparison, genes of interest = 1
+                allGenes = GeneList_MLWMLQ_down, 
+                geneSelectionFun = LFCgenes,
+                gene2GO = gene2mapping,
+                annot = annFUN.gene2GO)
+
+
+#Fisher Testing
+DEG.MLWMLQ_DOWN.mf_result_fisher <- runTest(DEgenes.MLWMLQ_DOWN.GO.mf, statistic = "fisher", algorithm = "weight01")
+DEG.MLWMLQ_DOWN.mf_result_fisher
+
+DEG.DOWN_MF.MLWMLQ.table <- GenTable(DEgenes.MLWMLQ_DOWN.GO.mf, 
+                                     raw.p.value = DEG.MLWMLQ_DOWN.mf_result_fisher, 
+                                     topNodes = 50, 
+                                     numChar = 120)
+
+write.csv(DEG.DOWN_MF.MLWMLQ.table, "Results/UpDownSplit/DOWN/byontology/MLWMLQ_DOWN_MFTerms.csv")
+```
+
+
+
+#### CC
+```{r cc_DEG_MLWMLQ_down}
+DEgenes.MLWMLQ_DOWN.GO.cc <- new("topGOdata",
+                description = paste("DEG Go", "CC", "MLWMLQ", sep = "_"),
+                ontology = "CC",
+                # all downregulated genes in this comparison, genes of interest = 1
+                allGenes = GeneList_MLWMLQ_down, 
+                geneSelectionFun = LFCgenes,
+                gene2GO = gene2mapping,
+                annot = annFUN.gene2GO)
+
+
+#Fisher Testing
+DEG.MLWMLQ_DOWN.cc_result_fisher <- runTest(DEgenes.MLWMLQ_DOWN.GO.cc, statistic = "fisher", algorithm = "weight01")
+DEG.MLWMLQ_DOWN.cc_result_fisher
+
+DEG.DOWN_CC.MLWMLQ.table <- GenTable(DEgenes.MLWMLQ_DOWN.GO.cc, 
+                                     raw.p.value = DEG.MLWMLQ_DOWN.cc_result_fisher, 
+                                     topNodes = 50,
+                                     numChar = 120)
+
+write.csv(DEG.DOWN_CC.MLWMLQ.table, "Results/UpDownSplit/DOWN/byontology/MLWMLQ_DOWN_CCTerms.csv")
+```
+
+```{r MLWMLQlargetable.DOWN}
+#ALL
+DEG.DOWN_BP.MLWMLQ.table <- cbind(DEG.DOWN_BP.MLWMLQ.table, ontology=rep("BP", length(DEG.DOWN_BP.MLWMLQ.table$GO.ID)))
+DEG.DOWN_MF.MLWMLQ.table <- cbind(DEG.DOWN_MF.MLWMLQ.table, ontology=rep("MF", length(DEG.DOWN_MF.MLWMLQ.table$GO.ID)))
+DEG.DOWN_CC.MLWMLQ.table <- cbind(DEG.DOWN_CC.MLWMLQ.table, ontology=rep("CC", length(DEG.DOWN_CC.MLWMLQ.table$GO.ID)))
+
+DEG_GOallontology.MLWMLQ.DOWNregulated <-rbind(DEG.DOWN_BP.MLWMLQ.table, DEG.DOWN_MF.MLWMLQ.table, DEG.DOWN_CC.MLWMLQ.table)
+write.csv(DEG_GOallontology.MLWMLQ.DOWNregulated, "Results/UpDownSplit/DOWN/ALL/DEGs_GOallontology_MLWMLQ_downregulated.csv")
+
+
+#Less than .01
+DEG.DOWN_BP.MLWMLQ.table.01 <- DEG.DOWN_BP.MLWMLQ.table[DEG.DOWN_BP.MLWMLQ.table$raw.p.value < 0.01,]
+DEG.DOWN_MF.MLWMLQ.table.01 <- DEG.DOWN_MF.MLWMLQ.table[DEG.DOWN_MF.MLWMLQ.table$raw.p.value < 0.01,]
+DEG.DOWN_CC.MLWMLQ.table.01 <- DEG.DOWN_CC.MLWMLQ.table[DEG.DOWN_CC.MLWMLQ.table$raw.p.value < 0.01,]
+
+DEG_GOallontology.MLWMLQ.DOWNregulated.01 <-rbind(DEG.DOWN_BP.MLWMLQ.table.01, DEG.DOWN_MF.MLWMLQ.table.01, DEG.DOWN_CC.MLWMLQ.table.01)
+write.csv(DEG_GOallontology.MLWMLQ.DOWNregulated.01, "Results/UpDownSplit/point1percent/DEGs_GOallontology_MLWMLQ_downregulated.01.csv")
+```
+
+
+
+```{r extractgenesforGOs.MLWMLQ}
+#get results table
+results.MLWMLQ <- list(BP.ALL = DEG_BP.MLWMLQ.table,
+  BP.UP = DEG.UP_BP.MLWMLQ.table, 
+  BP.DOWN = DEG.DOWN_BP.MLWMLQ.table,
+  MF.ALL = DEG_MF.MLWMLQ.table,
+  MF.UP = DEG.UP_MF.MLWMLQ.table, 
+  MF.DOWN = DEG.DOWN_MF.MLWMLQ.table,
+  CC.ALL = DEG_CC.MLWMLQ.table,
+  CC.UP = DEG.UP_CC.MLWMLQ.table, 
+  CC.DOWN = DEG.DOWN_CC.MLWMLQ.table
+)
+  
+#get a list of the godata objects
+GOdata_list.MLWMLQ <- list(
+  BP.ALL = DEgenes.MLWMLQ.GO.bp,
+  BP.UP = DEgenes.MLWMLQ_UP.GO.bp, 
+  BP.DOWN = DEgenes.MLWMLQ_DOWN.GO.bp,
+  MF.ALL = DEgenes.MLWMLQ.GO.mf,
+  MF.UP = DEgenes.MLWMLQ_UP.GO.mf, 
+  MF.DOWN = DEgenes.MLWMLQ_DOWN.GO.mf,
+  CC.ALL = DEgenes.MLWMLQ.GO.cc,
+  CC.UP = DEgenes.MLWMLQ_UP.GO.cc, 
+  CC.DOWN = DEgenes.MLWMLQ_DOWN.GO.cc
+)
+
+#geneID Extraction
+
+# Step 1: Filter significant GO terms (p < 0.01), handling scientific notation
+sig.terms_list.MLWMLQ <- lapply(results.MLWMLQ, function(tbl) {
+    # Ensure p-values are numeric (handles cases where they are character strings like "1.2e-5")
+    pvals <- as.numeric(tbl$raw.p.value)
+    
+    # Return GO.IDs with p < 0.01
+    tbl$GO.ID[which(pvals < 0.01)]
+})
+
+# Step 2: Extract significant genes per GO term from each GOdata object
+significant_genes_per_GO.MLWMLQ <- mapply(function(GOdata, go_ids) {
+    # Get genes associated with each GO term
+    genes_per_GO <- genesInTerm(object = GOdata, whichGO = go_ids)
+    # Get significant genes from the GOdata object
+    sigGenesSet <- sigGenes(GOdata)
+    # Intersect genes in each GO term with the significant genes
+    lapply(genes_per_GO, function(genes) intersect(genes, sigGenesSet))
+  },
+GOdata_list.MLWMLQ,
+sig.terms_list.MLWMLQ,
+SIMPLIFY = FALSE)
+
+
+
+#plus terms
+# Make a named vector of GO terms (Term names), per group
+go_term_names_list.MLWMLQ <- lapply(results.MLWMLQ, function(tbl) {
+  setNames(tbl$Term, tbl$GO.ID)
+})
+
+
+
+####This is the function that will be used across PW comparisons
+#write_sig_genes_per_GO_to_excel()
+
+
+write_sig_genes_per_GO_to_excel(
+  sig_gene_list = significant_genes_per_GO.MLWMLQ,
+  go_term_name_list = go_term_names_list.MLWMLQ,
+  output_file = "Results/GenesPerGO/MLWMLQ_significant_genes_per_GO.xlsx"
+)
+
+
+
+#Verify the overlap of genes between all, up, down
+#BP
+genesMLWMLQ_BP_ALL <- unique(unlist(significant_genes_per_GO.MLWMLQ$BP.ALL))
+genesMLWMLQ_BP_UP <- unique(unlist(significant_genes_per_GO.MLWMLQ$BP.UP))
+genesMLWMLQ_BP_DOWN <- unique(unlist(significant_genes_per_GO.MLWMLQ$BP.DOWN))
+
+  #OVERLAP
+  intersect(genesMLWMLQ_BP_ALL, genesMLWMLQ_BP_UP)
+  table(genesMLWMLQ_BP_UP %in% genesMLWMLQ_BP_ALL)
+  table(genesMLWMLQ_BP_UP %in% names(DEG.genelist.MLWMLQ))
+  
+  intersect(genesMLWMLQ_BP_ALL, genesMLWMLQ_BP_DOWN)
+  table(genesMLWMLQ_BP_DOWN %in% genesMLWMLQ_BP_ALL)
+  table(genesMLWMLQ_BP_DOWN %in% names(DEG.genelist.MLWMLQ))
+
+
+
+#MF
+genesMLWMLQ_MF_ALL <- unique(unlist(significant_genes_per_GO.MLWMLQ$MF.ALL))
+genesMLWMLQ_MF_UP <- unique(unlist(significant_genes_per_GO.MLWMLQ$MF.UP)) #no ups
+genesMLWMLQ_MF_DOWN <- unique(unlist(significant_genes_per_GO.MLWMLQ$MF.DOWN))
+
+  #OVERLAP
+  intersect(genesMLWMLQ_MF_ALL, genesMLWMLQ_MF_UP)
+  table(genesMLWMLQ_MF_UP %in% genesMLWMLQ_MF_ALL)
+  table(genesMLWMLQ_MF_UP %in% names(DEG.genelist.MLWMLQ))
+  
+  intersect(genesMLWMLQ_MF_ALL, genesMLWMLQ_MF_DOWN)
+  table(genesMLWMLQ_MF_DOWN %in% genesMLWMLQ_MF_ALL)
+  table(genesMLWMLQ_MF_DOWN %in% names(DEG.genelist.MLWMLQ))
+
+
+
+#CC
+genesMLWMLQ_CC_ALL <- unique(unlist(significant_genes_per_GO.MLWMLQ$CC.ALL))
+genesMLWMLQ_CC_UP <- unique(unlist(significant_genes_per_GO.MLWMLQ$CC.UP))
+genesMLWMLQ_CC_DOWN <- unique(unlist(significant_genes_per_GO.MLWMLQ$CC.DOWN))
+
+
+  #OVERLAP
+  intersect(genesMLWMLQ_CC_ALL, genesMLWMLQ_CC_UP)
+  table(genesMLWMLQ_CC_UP %in% genesMLWMLQ_CC_ALL)
+  table(genesMLWMLQ_CC_UP %in% names(DEG.genelist.MLWMLQ))
+  
+  intersect(genesMLWMLQ_CC_ALL, genesMLWMLQ_CC_DOWN)
+  table(genesMLWMLQ_CC_DOWN %in% genesMLWMLQ_CC_ALL)
+  table(genesMLWMLQ_CC_DOWN %in% names(DEG.genelist.MLWMLQ))
+
+
+```
+
+
+
+
+
+
+### QLWQLQ
+#### Upregulated
+
+#### BP
+```{r BP_DEG_QLWQLQ_up}
+GeneList_QLWQLQ_up <- as.integer(geneUniverse %in% DEgenes_UP.QLWQLQ)
+names(GeneList_QLWQLQ_up) <- geneUniverse
+LFCgenes <- function(x) x == 1
+
+#verifying number of upreg genes with LFC < 1.5
+table(GeneList_QLWQLQ_up)
+#verifying the function
+table(LFCgenes(GeneList_QLWQLQ_up))
+
+
+DEgenes.QLWQLQ_UP.GO.bp <- new("topGOdata",
+                description = paste("DEGUpGo", "BP", "QLWQLQ", sep = "_"),
+                ontology = "BP",
+                # all upregulated genes in this comparison, genes of interest = 1
+                allGenes = GeneList_QLWQLQ_up, 
+                geneSelectionFun = LFCgenes,
+                gene2GO = gene2mapping,
+                annot = annFUN.gene2GO)
+
+
+#Run enrichment test using Fisher's exact test
+DEG.QLWQLQ_UP.bp_result_Fisher <- runTest(DEgenes.QLWQLQ_UP.GO.bp, statistic = "fisher", algorithm = "weight01")
+DEG.QLWQLQ_UP.bp_result_Fisher
+
+DEG.UP_BP.QLWQLQ.table <- GenTable(DEgenes.QLWQLQ_UP.GO.bp, 
+                                   raw.p.value = DEG.QLWQLQ_UP.bp_result_Fisher, 
+                                   topNodes = 50, 
+                                   numChar = 120)
+
+write.csv(DEG.UP_BP.QLWQLQ.table, "Results/UpDownSplit/UP/byontology/QLWQLQ_UP_BPTerms.csv")
+```
+
+
+
+
+#### MF
+```{r mf_DEG_QLWQLQ_up}
+DEgenes.QLWQLQ_UP.GO.mf <- new("topGOdata",
+                description = paste("DEG Go", "MF", "QLWQLQ", sep = "_"),
+                ontology = "MF",
+                # all upregulated genes in this comparison, genes of interest = 1
+                allGenes = GeneList_QLWQLQ_up, 
+                geneSelectionFun = LFCgenes,
+                gene2GO = gene2mapping,
+                annot = annFUN.gene2GO)
+
+
+#Fisher Testing
+DEG.QLWQLQ_UP.mf_result_fisher <- runTest(DEgenes.QLWQLQ_UP.GO.mf, statistic = "fisher", algorithm = "weight01")
+DEG.QLWQLQ_UP.mf_result_fisher
+
+DEG.UP_MF.QLWQLQ.table <- GenTable(DEgenes.QLWQLQ_UP.GO.mf, 
+                                   raw.p.value = DEG.QLWQLQ_UP.mf_result_fisher, 
+                                   topNodes = 50, 
+                                   numChar = 120)
+
+write.csv(DEG.UP_MF.QLWQLQ.table, "Results/UpDownSplit/UP/byontology/QLWQLQ_UP_MFTerms.csv")
+```
+
+
+
+#### CC
+```{r cc_DEG_QLWQLQ_up}
+DEgenes.QLWQLQ_UP.GO.cc <- new("topGOdata",
+                description = paste("DEG Go", "CC", "QLWQLQ", sep = "_"),
+                ontology = "CC",
+                # all upregulated genes in this comparison, genes of interest = 1
+                allGenes = GeneList_QLWQLQ_up, 
+                geneSelectionFun = LFCgenes,
+                gene2GO = gene2mapping,
+                annot = annFUN.gene2GO)
+
+
+#Fisher Testing
+DEG.QLWQLQ_UP.cc_result_fisher <- runTest(DEgenes.QLWQLQ_UP.GO.cc, statistic = "fisher", algorithm = "weight01")
+DEG.QLWQLQ_UP.cc_result_fisher
+
+DEG.UP_CC.QLWQLQ.table <- GenTable(DEgenes.QLWQLQ_UP.GO.cc, 
+                                   raw.p.value = DEG.QLWQLQ_UP.cc_result_fisher, 
+                                   topNodes = 50, 
+                                   numChar = 120)
+
+write.csv(DEG.UP_CC.QLWQLQ.table, "Results/UpDownSplit/UP/byontology/QLWQLQ_UP_CCTerms.csv")
+```
+
+```{r QLWQLQlargetable.UP}
+#ALL
+DEG.UP_BP.QLWQLQ.table <- cbind(DEG.UP_BP.QLWQLQ.table, ontology=rep("BP", length(DEG.UP_BP.QLWQLQ.table$GO.ID)))
+DEG.UP_MF.QLWQLQ.table <- cbind(DEG.UP_MF.QLWQLQ.table, ontology=rep("MF", length(DEG.UP_MF.QLWQLQ.table$GO.ID)))
+DEG.UP_CC.QLWQLQ.table <- cbind(DEG.UP_CC.QLWQLQ.table, ontology=rep("CC", length(DEG.UP_CC.QLWQLQ.table$GO.ID)))
+
+DEG_GOallontology.QLWQLQ.UPregulated <-rbind(DEG.UP_BP.QLWQLQ.table, DEG.UP_MF.QLWQLQ.table, DEG.UP_CC.QLWQLQ.table)
+write.csv(DEG_GOallontology.QLWQLQ.UPregulated, "Results/UpDownSplit/UP/ALL/DEGs_GOallontology_QLWQLQ_upregulated.csv")
+
+
+#Less than .01
+DEG.UP_BP.QLWQLQ.table.01 <- DEG.UP_BP.QLWQLQ.table[DEG.UP_BP.QLWQLQ.table$raw.p.value < 0.01,]
+DEG.UP_MF.QLWQLQ.table.01 <- DEG.UP_MF.QLWQLQ.table[DEG.UP_MF.QLWQLQ.table$raw.p.value < 0.01,]
+DEG.UP_CC.QLWQLQ.table.01 <- DEG.UP_CC.QLWQLQ.table[DEG.UP_CC.QLWQLQ.table$raw.p.value < 0.01,]
+
+DEG_GOallontology.QLWQLQ.UPregulated.01 <-rbind(DEG.UP_BP.QLWQLQ.table.01, DEG.UP_MF.QLWQLQ.table.01, DEG.UP_CC.QLWQLQ.table.01)
+write.csv(DEG_GOallontology.QLWQLQ.UPregulated.01, "Results/UpDownSplit/point1percent/DEGs_GOallontology_QLWQLQ_upregulated.01.csv")
+```
+
+
+#### Downregulated
+#### BP
+```{r BP_DEG_QLWQLQ_down}
+GeneList_QLWQLQ_down <- as.integer(geneUniverse %in% DEgenes_DOWN.QLWQLQ)
+names(GeneList_QLWQLQ_down) <- geneUniverse
+
+#verifying number of upreg genes with LFC < -1.5
+table(GeneList_QLWQLQ_down)
+#verifying the function
+table(LFCgenes(GeneList_QLWQLQ_down))
+
+DEgenes.QLWQLQ_DOWN.GO.bp <- new("topGOdata",
+                description = paste("DEGDownGo", "BP", "QLWQLQ", sep = "_"),
+                ontology = "BP",
+                # all downregulated genes in this comparison, genes of interest = 1
+                allGenes = GeneList_QLWQLQ_down, 
+                geneSelectionFun = LFCgenes,
+                gene2GO = gene2mapping,
+                annot = annFUN.gene2GO)
+
+
+#Fisher Testing
+DEG.QLWQLQ_DOWN.bp_result_fisher <- runTest(DEgenes.QLWQLQ_DOWN.GO.bp, statistic = "fisher", algorithm = "weight01")
+DEG.QLWQLQ_DOWN.bp_result_fisher
+
+DEG.DOWN_BP.QLWQLQ.table <- GenTable(DEgenes.QLWQLQ_DOWN.GO.bp, 
+                                     raw.p.value = DEG.QLWQLQ_DOWN.bp_result_fisher, 
+                                     topNodes = 50,
+                                     numChar = 120)
+
+write.csv(DEG.DOWN_BP.QLWQLQ.table, "Results/UpDownSplit/DOWN/byontology/QLWQLQ_DOWN_BPTerms.csv")
+```
+
+
+#### MF
+```{r mf_DEG_QLWQLQ_down}
+DEgenes.QLWQLQ_DOWN.GO.mf <- new("topGOdata",
+                description = paste("DEG Go", "MF", "QLWQLQ", sep = "_"),
+                ontology = "MF",
+                # all downregulated genes in this comparison, genes of interest = 1
+                allGenes = GeneList_QLWQLQ_down, 
+                geneSelectionFun = LFCgenes,
+                gene2GO = gene2mapping,
+                annot = annFUN.gene2GO)
+
+
+#Fisher Testing
+DEG.QLWQLQ_DOWN.mf_result_fisher <- runTest(DEgenes.QLWQLQ_DOWN.GO.mf, statistic = "fisher", algorithm = "weight01")
+DEG.QLWQLQ_DOWN.mf_result_fisher
+
+DEG.DOWN_MF.QLWQLQ.table <- GenTable(DEgenes.QLWQLQ_DOWN.GO.mf, 
+                                     raw.p.value = DEG.QLWQLQ_DOWN.mf_result_fisher, 
+                                     topNodes = 50, 
+                                     numChar = 120)
+
+write.csv(DEG.DOWN_MF.QLWQLQ.table, "Results/UpDownSplit/DOWN/byontology/QLWQLQ_DOWN_MFTerms.csv")
+```
+
+
+
+#### CC
+```{r cc_DEG_QLWQLQ_down}
+DEgenes.QLWQLQ_DOWN.GO.cc <- new("topGOdata",
+                description = paste("DEG Go", "CC", "QLWQLQ", sep = "_"),
+                ontology = "CC",
+                # all downregulated genes in this comparison, genes of interest = 1
+                allGenes = GeneList_QLWQLQ_down, 
+                geneSelectionFun = LFCgenes,
+                gene2GO = gene2mapping,
+                annot = annFUN.gene2GO)
+
+
+#Fisher Testing
+DEG.QLWQLQ_DOWN.cc_result_fisher <- runTest(DEgenes.QLWQLQ_DOWN.GO.cc, statistic = "fisher", algorithm = "weight01")
+DEG.QLWQLQ_DOWN.cc_result_fisher
+
+DEG.DOWN_CC.QLWQLQ.table <- GenTable(DEgenes.QLWQLQ_DOWN.GO.cc, 
+                                     raw.p.value = DEG.QLWQLQ_DOWN.cc_result_fisher, 
+                                     topNodes = 50,
+                                     numChar = 120)
+
+write.csv(DEG.DOWN_CC.QLWQLQ.table, "Results/UpDownSplit/DOWN/byontology/QLWQLQ_DOWN_CCTerms.csv")
+```
+
+```{r QLWQLQlargetable.DOWN}
+#ALL
+DEG.DOWN_BP.QLWQLQ.table <- cbind(DEG.DOWN_BP.QLWQLQ.table, ontology=rep("BP", length(DEG.DOWN_BP.QLWQLQ.table$GO.ID)))
+DEG.DOWN_MF.QLWQLQ.table <- cbind(DEG.DOWN_MF.QLWQLQ.table, ontology=rep("MF", length(DEG.DOWN_MF.QLWQLQ.table$GO.ID)))
+DEG.DOWN_CC.QLWQLQ.table <- cbind(DEG.DOWN_CC.QLWQLQ.table, ontology=rep("CC", length(DEG.DOWN_CC.QLWQLQ.table$GO.ID)))
+
+DEG_GOallontology.QLWQLQ.DOWNregulated <-rbind(DEG.DOWN_BP.QLWQLQ.table, DEG.DOWN_MF.QLWQLQ.table, DEG.DOWN_CC.QLWQLQ.table)
+write.csv(DEG_GOallontology.QLWQLQ.DOWNregulated, "Results/UpDownSplit/DOWN/ALL/DEGs_GOallontology_QLWQLQ_downregulated.csv")
+
+
+#Less than .01
+DEG.DOWN_BP.QLWQLQ.table.01 <- DEG.DOWN_BP.QLWQLQ.table[DEG.DOWN_BP.QLWQLQ.table$raw.p.value < 0.01,]
+DEG.DOWN_MF.QLWQLQ.table.01 <- DEG.DOWN_MF.QLWQLQ.table[DEG.DOWN_MF.QLWQLQ.table$raw.p.value < 0.01,]
+DEG.DOWN_CC.QLWQLQ.table.01 <- DEG.DOWN_CC.QLWQLQ.table[DEG.DOWN_CC.QLWQLQ.table$raw.p.value < 0.01,]
+
+DEG_GOallontology.QLWQLQ.DOWNregulated.01 <-rbind(DEG.DOWN_BP.QLWQLQ.table.01, DEG.DOWN_MF.QLWQLQ.table.01, DEG.DOWN_CC.QLWQLQ.table.01)
+write.csv(DEG_GOallontology.QLWQLQ.DOWNregulated.01, "Results/UpDownSplit/point1percent/DEGs_GOallontology_QLWQLQ_downregulated.01.csv")
+```
+
+
+
+```{r extractgenesforGOs.QLWQLQ}
+#get results table
+results.QLWQLQ <- list(BP.ALL = DEG_BP.QLWQLQ.table,
+  BP.UP = DEG.UP_BP.QLWQLQ.table, 
+  BP.DOWN = DEG.DOWN_BP.QLWQLQ.table,
+  MF.ALL = DEG_MF.QLWQLQ.table,
+  MF.UP = DEG.UP_MF.QLWQLQ.table, 
+  MF.DOWN = DEG.DOWN_MF.QLWQLQ.table,
+  CC.ALL = DEG_CC.QLWQLQ.table,
+  CC.UP = DEG.UP_CC.QLWQLQ.table, 
+  CC.DOWN = DEG.DOWN_CC.QLWQLQ.table
+)
+  
+#get a list of the godata objects
+GOdata_list.QLWQLQ <- list(
+  BP.ALL = DEgenes.QLWQLQ.GO.bp,
+  BP.UP = DEgenes.QLWQLQ_UP.GO.bp, 
+  BP.DOWN = DEgenes.QLWQLQ_DOWN.GO.bp,
+  MF.ALL = DEgenes.QLWQLQ.GO.mf,
+  MF.UP = DEgenes.QLWQLQ_UP.GO.mf, 
+  MF.DOWN = DEgenes.QLWQLQ_DOWN.GO.mf,
+  CC.ALL = DEgenes.QLWQLQ.GO.cc,
+  CC.UP = DEgenes.QLWQLQ_UP.GO.cc, 
+  CC.DOWN = DEgenes.QLWQLQ_DOWN.GO.cc
+)
+
+#geneID Extraction
+
+# Step 1: Filter significant GO terms (p < 0.01), handling scientific notation
+sig.terms_list.QLWQLQ <- lapply(results.QLWQLQ, function(tbl) {
+    # Ensure p-values are numeric (handles cases where they are character strings like "1.2e-5")
+    pvals <- as.numeric(tbl$raw.p.value)
+    
+    # Return GO.IDs with p < 0.01
+    tbl$GO.ID[which(pvals < 0.01)]
+})
+
+# Step 2: Extract significant genes per GO term from each GOdata object
+significant_genes_per_GO.QLWQLQ <- mapply(function(GOdata, go_ids) {
+    # Get genes associated with each GO term
+    genes_per_GO <- genesInTerm(object = GOdata, whichGO = go_ids)
+    # Get significant genes from the GOdata object
+    sigGenesSet <- sigGenes(GOdata)
+    # Intersect genes in each GO term with the significant genes
+    lapply(genes_per_GO, function(genes) intersect(genes, sigGenesSet))
+  },
+GOdata_list.QLWQLQ,
+sig.terms_list.QLWQLQ,
+SIMPLIFY = FALSE)
+
+
+
+#plus terms
+# Make a named vector of GO terms (Term names), per group
+go_term_names_list.QLWQLQ <- lapply(results.QLWQLQ, function(tbl) {
+  setNames(tbl$Term, tbl$GO.ID)
+})
+
+
+
+####This is the function that will be used across PW comparisons
+#write_sig_genes_per_GO_to_excel()
+
+
+write_sig_genes_per_GO_to_excel(
+  sig_gene_list = significant_genes_per_GO.QLWQLQ,
+  go_term_name_list = go_term_names_list.QLWQLQ,
+  output_file = "Results/GenesPerGO/QLWQLQ_significant_genes_per_GO.xlsx"
+)
+
+
+
+#Verify the overlap of genes between all, up, down
+#BP
+genesQLWQLQ_BP_ALL <- unique(unlist(significant_genes_per_GO.QLWQLQ$BP.ALL))
+genesQLWQLQ_BP_UP <- unique(unlist(significant_genes_per_GO.QLWQLQ$BP.UP))
+genesQLWQLQ_BP_DOWN <- unique(unlist(significant_genes_per_GO.QLWQLQ$BP.DOWN))
+
+  #OVERLAP
+  intersect(genesQLWQLQ_BP_ALL, genesQLWQLQ_BP_UP)
+  table(genesQLWQLQ_BP_UP %in% genesQLWQLQ_BP_ALL)
+  table(genesQLWQLQ_BP_UP %in% names(DEG.genelist.QLWQLQ))
+  
+  intersect(genesQLWQLQ_BP_ALL, genesQLWQLQ_BP_DOWN)
+  table(genesQLWQLQ_BP_DOWN %in% genesQLWQLQ_BP_ALL)
+  table(genesQLWQLQ_BP_DOWN %in% names(DEG.genelist.QLWQLQ))
+
+
+
+#MF
+genesQLWQLQ_MF_ALL <- unique(unlist(significant_genes_per_GO.QLWQLQ$MF.ALL))
+genesQLWQLQ_MF_UP <- unique(unlist(significant_genes_per_GO.QLWQLQ$MF.UP))
+genesQLWQLQ_MF_DOWN <- unique(unlist(significant_genes_per_GO.QLWQLQ$MF.DOWN))
+
+  #OVERLAP
+  intersect(genesQLWQLQ_MF_ALL, genesQLWQLQ_MF_UP)
+  table(genesQLWQLQ_MF_UP %in% genesQLWQLQ_MF_ALL)
+  table(genesQLWQLQ_MF_UP %in% names(DEG.genelist.QLWQLQ))
+  
+  intersect(genesQLWQLQ_MF_ALL, genesQLWQLQ_MF_DOWN)
+  table(genesQLWQLQ_MF_DOWN %in% genesQLWQLQ_MF_ALL)
+  table(genesQLWQLQ_MF_DOWN %in% names(DEG.genelist.QLWQLQ))
+
+
+
+#CC
+genesQLWQLQ_CC_ALL <- unique(unlist(significant_genes_per_GO.QLWQLQ$CC.ALL))
+genesQLWQLQ_CC_UP <- unique(unlist(significant_genes_per_GO.QLWQLQ$CC.UP))
+genesQLWQLQ_CC_DOWN <- unique(unlist(significant_genes_per_GO.QLWQLQ$CC.DOWN))
+
+
+  #OVERLAP
+  intersect(genesQLWQLQ_CC_ALL, genesQLWQLQ_CC_UP)
+  table(genesQLWQLQ_CC_UP %in% genesQLWQLQ_CC_ALL)
+  table(genesQLWQLQ_CC_UP %in% names(DEG.genelist.QLWQLQ))
+  
+  intersect(genesQLWQLQ_CC_ALL, genesQLWQLQ_CC_DOWN)
+  table(genesQLWQLQ_CC_DOWN %in% genesQLWQLQ_CC_ALL)
+  table(genesQLWQLQ_CC_DOWN %in% names(DEG.genelist.QLWQLQ))
+
+
+```
+
+
+### FLQMLQ
+#### Upregulated
+
+#### BP
+```{r BP_DEG_FLQMLQ_up}
+GeneList_FLQMLQ_up <- as.integer(geneUniverse %in% DEgenes_UP.FLQMLQ)
+names(GeneList_FLQMLQ_up) <- geneUniverse
+LFCgenes <- function(x) x == 1
+
+#verifying number of upreg genes with LFC < 1.5
+table(GeneList_FLQMLQ_up)
+#verifying the function
+table(LFCgenes(GeneList_FLQMLQ_up))
+
+
+DEgenes.FLQMLQ_UP.GO.bp <- new("topGOdata",
+                description = paste("DEGUpGo", "BP", "FLQMLQ", sep = "_"),
+                ontology = "BP",
+                # all upregulated genes in this comparison, genes of interest = 1
+                allGenes = GeneList_FLQMLQ_up, 
+                geneSelectionFun = LFCgenes,
+                gene2GO = gene2mapping,
+                annot = annFUN.gene2GO)
+
+
+#Run enrichment test using Fisher's exact test
+DEG.FLQMLQ_UP.bp_result_Fisher <- runTest(DEgenes.FLQMLQ_UP.GO.bp, statistic = "fisher", algorithm = "weight01")
+DEG.FLQMLQ_UP.bp_result_Fisher
+
+DEG.UP_BP.FLQMLQ.table <- GenTable(DEgenes.FLQMLQ_UP.GO.bp, 
+                                   raw.p.value = DEG.FLQMLQ_UP.bp_result_Fisher, 
+                                   topNodes = 50, 
+                                   numChar = 120)
+
+write.csv(DEG.UP_BP.FLQMLQ.table, "Results/UpDownSplit/UP/byontology/FLQMLQ_UP_BPTerms.csv")
+```
+
+
+
+
+#### MF
+```{r mf_DEG_FLQMLQ_up}
+DEgenes.FLQMLQ_UP.GO.mf <- new("topGOdata",
+                description = paste("DEG Go", "MF", "FLQMLQ", sep = "_"),
+                ontology = "MF",
+                # all upregulated genes in this comparison, genes of interest = 1
+                allGenes = GeneList_FLQMLQ_up, 
+                geneSelectionFun = LFCgenes,
+                gene2GO = gene2mapping,
+                annot = annFUN.gene2GO)
+
+
+#Fisher Testing
+DEG.FLQMLQ_UP.mf_result_fisher <- runTest(DEgenes.FLQMLQ_UP.GO.mf, statistic = "fisher", algorithm = "weight01")
+DEG.FLQMLQ_UP.mf_result_fisher
+
+DEG.UP_MF.FLQMLQ.table <- GenTable(DEgenes.FLQMLQ_UP.GO.mf, 
+                                   raw.p.value = DEG.FLQMLQ_UP.mf_result_fisher, 
+                                   topNodes = 50, 
+                                   numChar = 120)
+
+write.csv(DEG.UP_MF.FLQMLQ.table, "Results/UpDownSplit/UP/byontology/FLQMLQ_UP_MFTerms.csv")
+```
+
+
+
+#### CC
+```{r cc_DEG_FLQMLQ_up}
+DEgenes.FLQMLQ_UP.GO.cc <- new("topGOdata",
+                description = paste("DEG Go", "CC", "FLQMLQ", sep = "_"),
+                ontology = "CC",
+                # all upregulated genes in this comparison, genes of interest = 1
+                allGenes = GeneList_FLQMLQ_up, 
+                geneSelectionFun = LFCgenes,
+                gene2GO = gene2mapping,
+                annot = annFUN.gene2GO)
+
+
+#Fisher Testing
+DEG.FLQMLQ_UP.cc_result_fisher <- runTest(DEgenes.FLQMLQ_UP.GO.cc, statistic = "fisher", algorithm = "weight01")
+DEG.FLQMLQ_UP.cc_result_fisher
+
+DEG.UP_CC.FLQMLQ.table <- GenTable(DEgenes.FLQMLQ_UP.GO.cc, 
+                                   raw.p.value = DEG.FLQMLQ_UP.cc_result_fisher, 
+                                   topNodes = 50, 
+                                   numChar = 120)
+
+write.csv(DEG.UP_CC.FLQMLQ.table, "Results/UpDownSplit/UP/byontology/FLQMLQ_UP_CCTerms.csv")
+```
+
+```{r FLQMLQlargetable.UP}
+#ALL
+DEG.UP_BP.FLQMLQ.table <- cbind(DEG.UP_BP.FLQMLQ.table, ontology=rep("BP", length(DEG.UP_BP.FLQMLQ.table$GO.ID)))
+DEG.UP_MF.FLQMLQ.table <- cbind(DEG.UP_MF.FLQMLQ.table, ontology=rep("MF", length(DEG.UP_MF.FLQMLQ.table$GO.ID)))
+DEG.UP_CC.FLQMLQ.table <- cbind(DEG.UP_CC.FLQMLQ.table, ontology=rep("CC", length(DEG.UP_CC.FLQMLQ.table$GO.ID)))
+
+DEG_GOallontology.FLQMLQ.UPregulated <-rbind(DEG.UP_BP.FLQMLQ.table, DEG.UP_MF.FLQMLQ.table, DEG.UP_CC.FLQMLQ.table)
+write.csv(DEG_GOallontology.FLQMLQ.UPregulated, "Results/UpDownSplit/UP/ALL/DEGs_GOallontology_FLQMLQ_upregulated.csv")
+
+
+#Less than .01
+DEG.UP_BP.FLQMLQ.table.01 <- DEG.UP_BP.FLQMLQ.table[DEG.UP_BP.FLQMLQ.table$raw.p.value < 0.01,]
+DEG.UP_MF.FLQMLQ.table.01 <- DEG.UP_MF.FLQMLQ.table[DEG.UP_MF.FLQMLQ.table$raw.p.value < 0.01,]
+DEG.UP_CC.FLQMLQ.table.01 <- DEG.UP_CC.FLQMLQ.table[DEG.UP_CC.FLQMLQ.table$raw.p.value < 0.01,]
+
+DEG_GOallontology.FLQMLQ.UPregulated.01 <-rbind(DEG.UP_BP.FLQMLQ.table.01, DEG.UP_MF.FLQMLQ.table.01, DEG.UP_CC.FLQMLQ.table.01)
+write.csv(DEG_GOallontology.FLQMLQ.UPregulated.01, "Results/UpDownSplit/point1percent/DEGs_GOallontology_FLQMLQ_upregulated.01.csv")
+```
+
+
+#### Downregulated
+#### BP
+```{r BP_DEG_FLQMLQ_down}
+GeneList_FLQMLQ_down <- as.integer(geneUniverse %in% DEgenes_DOWN.FLQMLQ)
+names(GeneList_FLQMLQ_down) <- geneUniverse
+
+#verifying number of upreg genes with LFC < -1.5
+table(GeneList_FLQMLQ_down)
+#verifying the function
+table(LFCgenes(GeneList_FLQMLQ_down))
+
+DEgenes.FLQMLQ_DOWN.GO.bp <- new("topGOdata",
+                description = paste("DEGDownGo", "BP", "FLQMLQ", sep = "_"),
+                ontology = "BP",
+                # all downregulated genes in this comparison, genes of interest = 1
+                allGenes = GeneList_FLQMLQ_down, 
+                geneSelectionFun = LFCgenes,
+                gene2GO = gene2mapping,
+                annot = annFUN.gene2GO)
+
+
+#Fisher Testing
+DEG.FLQMLQ_DOWN.bp_result_fisher <- runTest(DEgenes.FLQMLQ_DOWN.GO.bp, statistic = "fisher", algorithm = "weight01")
+DEG.FLQMLQ_DOWN.bp_result_fisher
+
+DEG.DOWN_BP.FLQMLQ.table <- GenTable(DEgenes.FLQMLQ_DOWN.GO.bp, 
+                                     raw.p.value = DEG.FLQMLQ_DOWN.bp_result_fisher, 
+                                     topNodes = 50,
+                                     numChar = 120)
+
+write.csv(DEG.DOWN_BP.FLQMLQ.table, "Results/UpDownSplit/DOWN/byontology/FLQMLQ_DOWN_BPTerms.csv")
+```
+
+
+#### MF
+```{r mf_DEG_FLQMLQ_down}
+DEgenes.FLQMLQ_DOWN.GO.mf <- new("topGOdata",
+                description = paste("DEG Go", "MF", "FLQMLQ", sep = "_"),
+                ontology = "MF",
+                # all downregulated genes in this comparison, genes of interest = 1
+                allGenes = GeneList_FLQMLQ_down, 
+                geneSelectionFun = LFCgenes,
+                gene2GO = gene2mapping,
+                annot = annFUN.gene2GO)
+
+
+#Fisher Testing
+DEG.FLQMLQ_DOWN.mf_result_fisher <- runTest(DEgenes.FLQMLQ_DOWN.GO.mf, statistic = "fisher", algorithm = "weight01")
+DEG.FLQMLQ_DOWN.mf_result_fisher
+
+DEG.DOWN_MF.FLQMLQ.table <- GenTable(DEgenes.FLQMLQ_DOWN.GO.mf, 
+                                     raw.p.value = DEG.FLQMLQ_DOWN.mf_result_fisher, 
+                                     topNodes = 50, 
+                                     numChar = 120)
+
+write.csv(DEG.DOWN_MF.FLQMLQ.table, "Results/UpDownSplit/DOWN/byontology/FLQMLQ_DOWN_MFTerms.csv")
+```
+
+
+
+#### CC
+```{r cc_DEG_FLQMLQ_down}
+DEgenes.FLQMLQ_DOWN.GO.cc <- new("topGOdata",
+                description = paste("DEG Go", "CC", "FLQMLQ", sep = "_"),
+                ontology = "CC",
+                # all downregulated genes in this comparison, genes of interest = 1
+                allGenes = GeneList_FLQMLQ_down, 
+                geneSelectionFun = LFCgenes,
+                gene2GO = gene2mapping,
+                annot = annFUN.gene2GO)
+
+
+#Fisher Testing
+DEG.FLQMLQ_DOWN.cc_result_fisher <- runTest(DEgenes.FLQMLQ_DOWN.GO.cc, statistic = "fisher", algorithm = "weight01")
+DEG.FLQMLQ_DOWN.cc_result_fisher
+
+DEG.DOWN_CC.FLQMLQ.table <- GenTable(DEgenes.FLQMLQ_DOWN.GO.cc, 
+                                     raw.p.value = DEG.FLQMLQ_DOWN.cc_result_fisher, 
+                                     topNodes = 50,
+                                     numChar = 120)
+
+write.csv(DEG.DOWN_CC.FLQMLQ.table, "Results/UpDownSplit/DOWN/byontology/FLQMLQ_DOWN_CCTerms.csv")
+```
+
+```{r FLQMLQlargetable.DOWN}
+#ALL
+DEG.DOWN_BP.FLQMLQ.table <- cbind(DEG.DOWN_BP.FLQMLQ.table, ontology=rep("BP", length(DEG.DOWN_BP.FLQMLQ.table$GO.ID)))
+DEG.DOWN_MF.FLQMLQ.table <- cbind(DEG.DOWN_MF.FLQMLQ.table, ontology=rep("MF", length(DEG.DOWN_MF.FLQMLQ.table$GO.ID)))
+DEG.DOWN_CC.FLQMLQ.table <- cbind(DEG.DOWN_CC.FLQMLQ.table, ontology=rep("CC", length(DEG.DOWN_CC.FLQMLQ.table$GO.ID)))
+
+DEG_GOallontology.FLQMLQ.DOWNregulated <-rbind(DEG.DOWN_BP.FLQMLQ.table, DEG.DOWN_MF.FLQMLQ.table, DEG.DOWN_CC.FLQMLQ.table)
+write.csv(DEG_GOallontology.FLQMLQ.DOWNregulated, "Results/UpDownSplit/DOWN/ALL/DEGs_GOallontology_FLQMLQ_downregulated.csv")
+
+
+#Less than .01
+DEG.DOWN_BP.FLQMLQ.table.01 <- DEG.DOWN_BP.FLQMLQ.table[DEG.DOWN_BP.FLQMLQ.table$raw.p.value < 0.01,]
+DEG.DOWN_MF.FLQMLQ.table.01 <- DEG.DOWN_MF.FLQMLQ.table[DEG.DOWN_MF.FLQMLQ.table$raw.p.value < 0.01,]
+DEG.DOWN_CC.FLQMLQ.table.01 <- DEG.DOWN_CC.FLQMLQ.table[DEG.DOWN_CC.FLQMLQ.table$raw.p.value < 0.01,]
+
+DEG_GOallontology.FLQMLQ.DOWNregulated.01 <-rbind(DEG.DOWN_BP.FLQMLQ.table.01, DEG.DOWN_MF.FLQMLQ.table.01, DEG.DOWN_CC.FLQMLQ.table.01)
+write.csv(DEG_GOallontology.FLQMLQ.DOWNregulated.01, "Results/UpDownSplit/point1percent/DEGs_GOallontology_FLQMLQ_downregulated.01.csv")
+```
+
+
+
+```{r extractgenesforGOs.FLQMLQ}
+#get results table
+results.FLQMLQ <- list(BP.ALL = DEG_BP.FLQMLQ.table,
+  BP.UP = DEG.UP_BP.FLQMLQ.table, 
+  BP.DOWN = DEG.DOWN_BP.FLQMLQ.table,
+  MF.ALL = DEG_MF.FLQMLQ.table,
+  MF.UP = DEG.UP_MF.FLQMLQ.table, 
+  MF.DOWN = DEG.DOWN_MF.FLQMLQ.table,
+  CC.ALL = DEG_CC.FLQMLQ.table,
+  CC.UP = DEG.UP_CC.FLQMLQ.table, 
+  CC.DOWN = DEG.DOWN_CC.FLQMLQ.table
+)
+  
+#get a list of the godata objects
+GOdata_list.FLQMLQ <- list(
+  BP.ALL = DEgenes.FLQMLQ.GO.bp,
+  BP.UP = DEgenes.FLQMLQ_UP.GO.bp, 
+  BP.DOWN = DEgenes.FLQMLQ_DOWN.GO.bp,
+  MF.ALL = DEgenes.FLQMLQ.GO.mf,
+  MF.UP = DEgenes.FLQMLQ_UP.GO.mf, 
+  MF.DOWN = DEgenes.FLQMLQ_DOWN.GO.mf,
+  CC.ALL = DEgenes.FLQMLQ.GO.cc,
+  CC.UP = DEgenes.FLQMLQ_UP.GO.cc, 
+  CC.DOWN = DEgenes.FLQMLQ_DOWN.GO.cc
+)
+
+#geneID Extraction
+
+# Step 1: Filter significant GO terms (p < 0.01), handling scientific notation
+sig.terms_list.FLQMLQ <- lapply(results.FLQMLQ, function(tbl) {
+    # Ensure p-values are numeric (handles cases where they are character strings like "1.2e-5")
+    pvals <- as.numeric(tbl$raw.p.value)
+    
+    # Return GO.IDs with p < 0.01
+    tbl$GO.ID[which(pvals < 0.01)]
+})
+
+# Step 2: Extract significant genes per GO term from each GOdata object
+significant_genes_per_GO.FLQMLQ <- mapply(function(GOdata, go_ids) {
+    # Get genes associated with each GO term
+    genes_per_GO <- genesInTerm(object = GOdata, whichGO = go_ids)
+    # Get significant genes from the GOdata object
+    sigGenesSet <- sigGenes(GOdata)
+    # Intersect genes in each GO term with the significant genes
+    lapply(genes_per_GO, function(genes) intersect(genes, sigGenesSet))
+  },
+GOdata_list.FLQMLQ,
+sig.terms_list.FLQMLQ,
+SIMPLIFY = FALSE)
+
+
+
+#plus terms
+# Make a named vector of GO terms (Term names), per group
+go_term_names_list.FLQMLQ <- lapply(results.FLQMLQ, function(tbl) {
+  setNames(tbl$Term, tbl$GO.ID)
+})
+
+
+
+####This is the function that will be used across PW comparisons
+#write_sig_genes_per_GO_to_excel()
+
+
+write_sig_genes_per_GO_to_excel(
+  sig_gene_list = significant_genes_per_GO.FLQMLQ,
+  go_term_name_list = go_term_names_list.FLQMLQ,
+  output_file = "Results/GenesPerGO/FLQMLQ_significant_genes_per_GO.xlsx"
+)
+
+
+
+#Verify the overlap of genes between all, up, down
+#BP
+genesFLQMLQ_BP_ALL <- unique(unlist(significant_genes_per_GO.FLQMLQ$BP.ALL))
+genesFLQMLQ_BP_UP <- unique(unlist(significant_genes_per_GO.FLQMLQ$BP.UP))
+genesFLQMLQ_BP_DOWN <- unique(unlist(significant_genes_per_GO.FLQMLQ$BP.DOWN))
+
+  #OVERLAP
+  intersect(genesFLQMLQ_BP_ALL, genesFLQMLQ_BP_UP)
+  table(genesFLQMLQ_BP_UP %in% genesFLQMLQ_BP_ALL)
+  table(genesFLQMLQ_BP_UP %in% names(DEG.genelist.FLQMLQ))
+  
+  intersect(genesFLQMLQ_BP_ALL, genesFLQMLQ_BP_DOWN)
+  table(genesFLQMLQ_BP_DOWN %in% genesFLQMLQ_BP_ALL)
+  table(genesFLQMLQ_BP_DOWN %in% names(DEG.genelist.FLQMLQ))
+
+
+
+#MF
+genesFLQMLQ_MF_ALL <- unique(unlist(significant_genes_per_GO.FLQMLQ$MF.ALL))
+genesFLQMLQ_MF_UP <- unique(unlist(significant_genes_per_GO.FLQMLQ$MF.UP))
+genesFLQMLQ_MF_DOWN <- unique(unlist(significant_genes_per_GO.FLQMLQ$MF.DOWN))
+
+  #OVERLAP
+  intersect(genesFLQMLQ_MF_ALL, genesFLQMLQ_MF_UP)
+  table(genesFLQMLQ_MF_UP %in% genesFLQMLQ_MF_ALL)
+  table(genesFLQMLQ_MF_UP %in% names(DEG.genelist.FLQMLQ))
+  
+  intersect(genesFLQMLQ_MF_ALL, genesFLQMLQ_MF_DOWN)
+  table(genesFLQMLQ_MF_DOWN %in% genesFLQMLQ_MF_ALL)
+  table(genesFLQMLQ_MF_DOWN %in% names(DEG.genelist.FLQMLQ))
+
+
+
+#CC
+genesFLQMLQ_CC_ALL <- unique(unlist(significant_genes_per_GO.FLQMLQ$CC.ALL))
+genesFLQMLQ_CC_UP <- unique(unlist(significant_genes_per_GO.FLQMLQ$CC.UP))
+genesFLQMLQ_CC_DOWN <- unique(unlist(significant_genes_per_GO.FLQMLQ$CC.DOWN))
+
+
+  #OVERLAP
+  intersect(genesFLQMLQ_CC_ALL, genesFLQMLQ_CC_UP)
+  table(genesFLQMLQ_CC_UP %in% genesFLQMLQ_CC_ALL)
+  table(genesFLQMLQ_CC_UP %in% names(DEG.genelist.FLQMLQ))
+  
+  intersect(genesFLQMLQ_CC_ALL, genesFLQMLQ_CC_DOWN)
+  table(genesFLQMLQ_CC_DOWN %in% genesFLQMLQ_CC_ALL)
+  table(genesFLQMLQ_CC_DOWN %in% names(DEG.genelist.FLQMLQ))
+
+
+```
+
+
+
+
+
+
+### FLQQLQ
+#### Upregulated
+
+#### BP
+```{r BP_DEG_FLQQLQ_up}
+GeneList_FLQQLQ_up <- as.integer(geneUniverse %in% DEgenes_UP.FLQQLQ)
+names(GeneList_FLQQLQ_up) <- geneUniverse
+LFCgenes <- function(x) x == 1
+
+#verifying number of upreg genes with LFC < 1.5
+table(GeneList_FLQQLQ_up)
+#verifying the function
+table(LFCgenes(GeneList_FLQQLQ_up))
+
+
+DEgenes.FLQQLQ_UP.GO.bp <- new("topGOdata",
+                description = paste("DEGUpGo", "BP", "FLQQLQ", sep = "_"),
+                ontology = "BP",
+                # all upregulated genes in this comparison, genes of interest = 1
+                allGenes = GeneList_FLQQLQ_up, 
+                geneSelectionFun = LFCgenes,
+                gene2GO = gene2mapping,
+                annot = annFUN.gene2GO)
+
+
+#Run enrichment test using Fisher's exact test
+DEG.FLQQLQ_UP.bp_result_Fisher <- runTest(DEgenes.FLQQLQ_UP.GO.bp, statistic = "fisher", algorithm = "weight01")
+DEG.FLQQLQ_UP.bp_result_Fisher
+
+DEG.UP_BP.FLQQLQ.table <- GenTable(DEgenes.FLQQLQ_UP.GO.bp, 
+                                   raw.p.value = DEG.FLQQLQ_UP.bp_result_Fisher, 
+                                   topNodes = 50, 
+                                   numChar = 120)
+
+write.csv(DEG.UP_BP.FLQQLQ.table, "Results/UpDownSplit/UP/byontology/FLQQLQ_UP_BPTerms.csv")
+```
+
+
+
+
+#### MF
+```{r mf_DEG_FLQQLQ_up}
+DEgenes.FLQQLQ_UP.GO.mf <- new("topGOdata",
+                description = paste("DEG Go", "MF", "FLQQLQ", sep = "_"),
+                ontology = "MF",
+                # all upregulated genes in this comparison, genes of interest = 1
+                allGenes = GeneList_FLQQLQ_up, 
+                geneSelectionFun = LFCgenes,
+                gene2GO = gene2mapping,
+                annot = annFUN.gene2GO)
+
+
+#Fisher Testing
+DEG.FLQQLQ_UP.mf_result_fisher <- runTest(DEgenes.FLQQLQ_UP.GO.mf, statistic = "fisher", algorithm = "weight01")
+DEG.FLQQLQ_UP.mf_result_fisher
+
+DEG.UP_MF.FLQQLQ.table <- GenTable(DEgenes.FLQQLQ_UP.GO.mf, 
+                                   raw.p.value = DEG.FLQQLQ_UP.mf_result_fisher, 
+                                   topNodes = 50, 
+                                   numChar = 120)
+
+write.csv(DEG.UP_MF.FLQQLQ.table, "Results/UpDownSplit/UP/byontology/FLQQLQ_UP_MFTerms.csv")
+```
+
+
+
+#### CC
+```{r cc_DEG_FLQQLQ_up}
+DEgenes.FLQQLQ_UP.GO.cc <- new("topGOdata",
+                description = paste("DEG Go", "CC", "FLQQLQ", sep = "_"),
+                ontology = "CC",
+                # all upregulated genes in this comparison, genes of interest = 1
+                allGenes = GeneList_FLQQLQ_up, 
+                geneSelectionFun = LFCgenes,
+                gene2GO = gene2mapping,
+                annot = annFUN.gene2GO)
+
+
+#Fisher Testing
+DEG.FLQQLQ_UP.cc_result_fisher <- runTest(DEgenes.FLQQLQ_UP.GO.cc, statistic = "fisher", algorithm = "weight01")
+DEG.FLQQLQ_UP.cc_result_fisher
+
+DEG.UP_CC.FLQQLQ.table <- GenTable(DEgenes.FLQQLQ_UP.GO.cc, 
+                                   raw.p.value = DEG.FLQQLQ_UP.cc_result_fisher, 
+                                   topNodes = 50, 
+                                   numChar = 120)
+
+write.csv(DEG.UP_CC.FLQQLQ.table, "Results/UpDownSplit/UP/byontology/FLQQLQ_UP_CCTerms.csv")
+```
+
+```{r FLQQLQlargetable.UP}
+#ALL
+DEG.UP_BP.FLQQLQ.table <- cbind(DEG.UP_BP.FLQQLQ.table, ontology=rep("BP", length(DEG.UP_BP.FLQQLQ.table$GO.ID)))
+DEG.UP_MF.FLQQLQ.table <- cbind(DEG.UP_MF.FLQQLQ.table, ontology=rep("MF", length(DEG.UP_MF.FLQQLQ.table$GO.ID)))
+DEG.UP_CC.FLQQLQ.table <- cbind(DEG.UP_CC.FLQQLQ.table, ontology=rep("CC", length(DEG.UP_CC.FLQQLQ.table$GO.ID)))
+
+DEG_GOallontology.FLQQLQ.UPregulated <-rbind(DEG.UP_BP.FLQQLQ.table, DEG.UP_MF.FLQQLQ.table, DEG.UP_CC.FLQQLQ.table)
+write.csv(DEG_GOallontology.FLQQLQ.UPregulated, "Results/UpDownSplit/UP/ALL/DEGs_GOallontology_FLQQLQ_upregulated.csv")
+
+
+#Less than .01
+DEG.UP_BP.FLQQLQ.table.01 <- DEG.UP_BP.FLQQLQ.table[DEG.UP_BP.FLQQLQ.table$raw.p.value < 0.01,]
+DEG.UP_MF.FLQQLQ.table.01 <- DEG.UP_MF.FLQQLQ.table[DEG.UP_MF.FLQQLQ.table$raw.p.value < 0.01,]
+DEG.UP_CC.FLQQLQ.table.01 <- DEG.UP_CC.FLQQLQ.table[DEG.UP_CC.FLQQLQ.table$raw.p.value < 0.01,]
+
+DEG_GOallontology.FLQQLQ.UPregulated.01 <-rbind(DEG.UP_BP.FLQQLQ.table.01, DEG.UP_MF.FLQQLQ.table.01, DEG.UP_CC.FLQQLQ.table.01)
+write.csv(DEG_GOallontology.FLQQLQ.UPregulated.01, "Results/UpDownSplit/point1percent/DEGs_GOallontology_FLQQLQ_upregulated.01.csv")
+```
+
+
+#### Downregulated
+#### BP
+```{r BP_DEG_FLQQLQ_down}
+GeneList_FLQQLQ_down <- as.integer(geneUniverse %in% DEgenes_DOWN.FLQQLQ)
+names(GeneList_FLQQLQ_down) <- geneUniverse
+
+#verifying number of upreg genes with LFC < -1.5
+table(GeneList_FLQQLQ_down)
+#verifying the function
+table(LFCgenes(GeneList_FLQQLQ_down))
+
+DEgenes.FLQQLQ_DOWN.GO.bp <- new("topGOdata",
+                description = paste("DEGDownGo", "BP", "FLQQLQ", sep = "_"),
+                ontology = "BP",
+                # all downregulated genes in this comparison, genes of interest = 1
+                allGenes = GeneList_FLQQLQ_down, 
+                geneSelectionFun = LFCgenes,
+                gene2GO = gene2mapping,
+                annot = annFUN.gene2GO)
+
+
+#Fisher Testing
+DEG.FLQQLQ_DOWN.bp_result_fisher <- runTest(DEgenes.FLQQLQ_DOWN.GO.bp, statistic = "fisher", algorithm = "weight01")
+DEG.FLQQLQ_DOWN.bp_result_fisher
+
+DEG.DOWN_BP.FLQQLQ.table <- GenTable(DEgenes.FLQQLQ_DOWN.GO.bp, 
+                                     raw.p.value = DEG.FLQQLQ_DOWN.bp_result_fisher, 
+                                     topNodes = 50,
+                                     numChar = 120)
+
+write.csv(DEG.DOWN_BP.FLQQLQ.table, "Results/UpDownSplit/DOWN/byontology/FLQQLQ_DOWN_BPTerms.csv")
+```
+
+
+#### MF
+```{r mf_DEG_FLQQLQ_down}
+DEgenes.FLQQLQ_DOWN.GO.mf <- new("topGOdata",
+                description = paste("DEG Go", "MF", "FLQQLQ", sep = "_"),
+                ontology = "MF",
+                # all downregulated genes in this comparison, genes of interest = 1
+                allGenes = GeneList_FLQQLQ_down, 
+                geneSelectionFun = LFCgenes,
+                gene2GO = gene2mapping,
+                annot = annFUN.gene2GO)
+
+
+#Fisher Testing
+DEG.FLQQLQ_DOWN.mf_result_fisher <- runTest(DEgenes.FLQQLQ_DOWN.GO.mf, statistic = "fisher", algorithm = "weight01")
+DEG.FLQQLQ_DOWN.mf_result_fisher
+
+DEG.DOWN_MF.FLQQLQ.table <- GenTable(DEgenes.FLQQLQ_DOWN.GO.mf, 
+                                     raw.p.value = DEG.FLQQLQ_DOWN.mf_result_fisher, 
+                                     topNodes = 50, 
+                                     numChar = 120)
+
+write.csv(DEG.DOWN_MF.FLQQLQ.table, "Results/UpDownSplit/DOWN/byontology/FLQQLQ_DOWN_MFTerms.csv")
+```
+
+
+
+#### CC
+```{r cc_DEG_FLQQLQ_down}
+DEgenes.FLQQLQ_DOWN.GO.cc <- new("topGOdata",
+                description = paste("DEG Go", "CC", "FLQQLQ", sep = "_"),
+                ontology = "CC",
+                # all downregulated genes in this comparison, genes of interest = 1
+                allGenes = GeneList_FLQQLQ_down, 
+                geneSelectionFun = LFCgenes,
+                gene2GO = gene2mapping,
+                annot = annFUN.gene2GO)
+
+
+#Fisher Testing
+DEG.FLQQLQ_DOWN.cc_result_fisher <- runTest(DEgenes.FLQQLQ_DOWN.GO.cc, statistic = "fisher", algorithm = "weight01")
+DEG.FLQQLQ_DOWN.cc_result_fisher
+
+DEG.DOWN_CC.FLQQLQ.table <- GenTable(DEgenes.FLQQLQ_DOWN.GO.cc, 
+                                     raw.p.value = DEG.FLQQLQ_DOWN.cc_result_fisher, 
+                                     topNodes = 50,
+                                     numChar = 120)
+
+write.csv(DEG.DOWN_CC.FLQQLQ.table, "Results/UpDownSplit/DOWN/byontology/FLQQLQ_DOWN_CCTerms.csv")
+```
+
+```{r FLQQLQlargetable.DOWN}
+#ALL
+DEG.DOWN_BP.FLQQLQ.table <- cbind(DEG.DOWN_BP.FLQQLQ.table, ontology=rep("BP", length(DEG.DOWN_BP.FLQQLQ.table$GO.ID)))
+DEG.DOWN_MF.FLQQLQ.table <- cbind(DEG.DOWN_MF.FLQQLQ.table, ontology=rep("MF", length(DEG.DOWN_MF.FLQQLQ.table$GO.ID)))
+DEG.DOWN_CC.FLQQLQ.table <- cbind(DEG.DOWN_CC.FLQQLQ.table, ontology=rep("CC", length(DEG.DOWN_CC.FLQQLQ.table$GO.ID)))
+
+DEG_GOallontology.FLQQLQ.DOWNregulated <-rbind(DEG.DOWN_BP.FLQQLQ.table, DEG.DOWN_MF.FLQQLQ.table, DEG.DOWN_CC.FLQQLQ.table)
+write.csv(DEG_GOallontology.FLQQLQ.DOWNregulated, "Results/UpDownSplit/DOWN/ALL/DEGs_GOallontology_FLQQLQ_downregulated.csv")
+
+
+#Less than .01
+DEG.DOWN_BP.FLQQLQ.table.01 <- DEG.DOWN_BP.FLQQLQ.table[DEG.DOWN_BP.FLQQLQ.table$raw.p.value < 0.01,]
+DEG.DOWN_MF.FLQQLQ.table.01 <- DEG.DOWN_MF.FLQQLQ.table[DEG.DOWN_MF.FLQQLQ.table$raw.p.value < 0.01,]
+DEG.DOWN_CC.FLQQLQ.table.01 <- DEG.DOWN_CC.FLQQLQ.table[DEG.DOWN_CC.FLQQLQ.table$raw.p.value < 0.01,]
+
+DEG_GOallontology.FLQQLQ.DOWNregulated.01 <-rbind(DEG.DOWN_BP.FLQQLQ.table.01, DEG.DOWN_MF.FLQQLQ.table.01, DEG.DOWN_CC.FLQQLQ.table.01)
+write.csv(DEG_GOallontology.FLQQLQ.DOWNregulated.01, "Results/UpDownSplit/point1percent/DEGs_GOallontology_FLQQLQ_downregulated.01.csv")
+```
+
+
+
+```{r extractgenesforGOs.FLQQLQ}
+#get results table
+results.FLQQLQ <- list(BP.ALL = DEG_BP.FLQQLQ.table,
+  BP.UP = DEG.UP_BP.FLQQLQ.table, 
+  BP.DOWN = DEG.DOWN_BP.FLQQLQ.table,
+  MF.ALL = DEG_MF.FLQQLQ.table,
+  MF.UP = DEG.UP_MF.FLQQLQ.table, 
+  MF.DOWN = DEG.DOWN_MF.FLQQLQ.table,
+  CC.ALL = DEG_CC.FLQQLQ.table,
+  CC.UP = DEG.UP_CC.FLQQLQ.table, 
+  CC.DOWN = DEG.DOWN_CC.FLQQLQ.table
+)
+  
+#get a list of the godata objects
+GOdata_list.FLQQLQ <- list(
+  BP.ALL = DEgenes.FLQQLQ.GO.bp,
+  BP.UP = DEgenes.FLQQLQ_UP.GO.bp, 
+  BP.DOWN = DEgenes.FLQQLQ_DOWN.GO.bp,
+  MF.ALL = DEgenes.FLQQLQ.GO.mf,
+  MF.UP = DEgenes.FLQQLQ_UP.GO.mf, 
+  MF.DOWN = DEgenes.FLQQLQ_DOWN.GO.mf,
+  CC.ALL = DEgenes.FLQQLQ.GO.cc,
+  CC.UP = DEgenes.FLQQLQ_UP.GO.cc, 
+  CC.DOWN = DEgenes.FLQQLQ_DOWN.GO.cc
+)
+
+#geneID Extraction
+
+# Step 1: Filter significant GO terms (p < 0.01), handling scientific notation
+sig.terms_list.FLQQLQ <- lapply(results.FLQQLQ, function(tbl) {
+    # Ensure p-values are numeric (handles cases where they are character strings like "1.2e-5")
+    pvals <- as.numeric(tbl$raw.p.value)
+    
+    # Return GO.IDs with p < 0.01
+    tbl$GO.ID[which(pvals < 0.01)]
+})
+
+# Step 2: Extract significant genes per GO term from each GOdata object
+significant_genes_per_GO.FLQQLQ <- mapply(function(GOdata, go_ids) {
+    # Get genes associated with each GO term
+    genes_per_GO <- genesInTerm(object = GOdata, whichGO = go_ids)
+    # Get significant genes from the GOdata object
+    sigGenesSet <- sigGenes(GOdata)
+    # Intersect genes in each GO term with the significant genes
+    lapply(genes_per_GO, function(genes) intersect(genes, sigGenesSet))
+  },
+GOdata_list.FLQQLQ,
+sig.terms_list.FLQQLQ,
+SIMPLIFY = FALSE)
+
+
+
+#plus terms
+# Make a named vector of GO terms (Term names), per group
+go_term_names_list.FLQQLQ <- lapply(results.FLQQLQ, function(tbl) {
+  setNames(tbl$Term, tbl$GO.ID)
+})
+
+
+
+####This is the function that will be used across PW comparisons
+#write_sig_genes_per_GO_to_excel()
+
+
+write_sig_genes_per_GO_to_excel(
+  sig_gene_list = significant_genes_per_GO.FLQQLQ,
+  go_term_name_list = go_term_names_list.FLQQLQ,
+  output_file = "Results/GenesPerGO/FLQQLQ_significant_genes_per_GO.xlsx"
+)
+
+
+
+#Verify the overlap of genes between all, up, down
+#BP
+genesFLQQLQ_BP_ALL <- unique(unlist(significant_genes_per_GO.FLQQLQ$BP.ALL))
+genesFLQQLQ_BP_UP <- unique(unlist(significant_genes_per_GO.FLQQLQ$BP.UP))
+genesFLQQLQ_BP_DOWN <- unique(unlist(significant_genes_per_GO.FLQQLQ$BP.DOWN))
+
+  #OVERLAP
+  intersect(genesFLQQLQ_BP_ALL, genesFLQQLQ_BP_UP)
+  table(genesFLQQLQ_BP_UP %in% genesFLQQLQ_BP_ALL)
+  table(genesFLQQLQ_BP_UP %in% names(DEG.genelist.FLQQLQ))
+  
+  intersect(genesFLQQLQ_BP_ALL, genesFLQQLQ_BP_DOWN)
+  table(genesFLQQLQ_BP_DOWN %in% genesFLQQLQ_BP_ALL)
+  table(genesFLQQLQ_BP_DOWN %in% names(DEG.genelist.FLQQLQ))
+
+
+
+#MF
+genesFLQQLQ_MF_ALL <- unique(unlist(significant_genes_per_GO.FLQQLQ$MF.ALL))
+genesFLQQLQ_MF_UP <- unique(unlist(significant_genes_per_GO.FLQQLQ$MF.UP))
+genesFLQQLQ_MF_DOWN <- unique(unlist(significant_genes_per_GO.FLQQLQ$MF.DOWN))
+
+  #OVERLAP
+  intersect(genesFLQQLQ_MF_ALL, genesFLQQLQ_MF_UP)
+  table(genesFLQQLQ_MF_UP %in% genesFLQQLQ_MF_ALL)
+  table(genesFLQQLQ_MF_UP %in% names(DEG.genelist.FLQQLQ))
+  
+  intersect(genesFLQQLQ_MF_ALL, genesFLQQLQ_MF_DOWN)
+  table(genesFLQQLQ_MF_DOWN %in% genesFLQQLQ_MF_ALL)
+  table(genesFLQQLQ_MF_DOWN %in% names(DEG.genelist.FLQQLQ))
+
+
+
+#CC
+genesFLQQLQ_CC_ALL <- unique(unlist(significant_genes_per_GO.FLQQLQ$CC.ALL))
+genesFLQQLQ_CC_UP <- unique(unlist(significant_genes_per_GO.FLQQLQ$CC.UP))
+genesFLQQLQ_CC_DOWN <- unique(unlist(significant_genes_per_GO.FLQQLQ$CC.DOWN))
+
+
+  #OVERLAP
+  intersect(genesFLQQLQ_CC_ALL, genesFLQQLQ_CC_UP)
+  table(genesFLQQLQ_CC_UP %in% genesFLQQLQ_CC_ALL)
+  table(genesFLQQLQ_CC_UP %in% names(DEG.genelist.FLQQLQ))
+  
+  intersect(genesFLQQLQ_CC_ALL, genesFLQQLQ_CC_DOWN)
+  table(genesFLQQLQ_CC_DOWN %in% genesFLQQLQ_CC_ALL)
+  table(genesFLQQLQ_CC_DOWN %in% names(DEG.genelist.FLQQLQ))
+
+
+```
+
+
+
+
+
+
+
+
+### FLWMLW
+#### Upregulated
+No upregulated genes.
+
+
+
+#### Downregulated
+#### BP
+```{r BP_DEG_FLWMLW_down}
+GeneList_FLWMLW_down <- as.integer(geneUniverse %in% DEgenes_DOWN.FLWMLW)
+names(GeneList_FLWMLW_down) <- geneUniverse
+
+#verifying number of upreg genes with LFC < -1.5
+table(GeneList_FLWMLW_down)
+#verifying the function
+table(LFCgenes(GeneList_FLWMLW_down))
+
+DEgenes.FLWMLW_DOWN.GO.bp <- new("topGOdata",
+                description = paste("DEGDownGo", "BP", "FLWMLW", sep = "_"),
+                ontology = "BP",
+                # all downregulated genes in this comparison, genes of interest = 1
+                allGenes = GeneList_FLWMLW_down, 
+                geneSelectionFun = LFCgenes,
+                gene2GO = gene2mapping,
+                annot = annFUN.gene2GO)
+
+
+#Fisher Testing
+DEG.FLWMLW_DOWN.bp_result_fisher <- runTest(DEgenes.FLWMLW_DOWN.GO.bp, statistic = "fisher", algorithm = "weight01")
+DEG.FLWMLW_DOWN.bp_result_fisher
+
+DEG.DOWN_BP.FLWMLW.table <- GenTable(DEgenes.FLWMLW_DOWN.GO.bp, 
+                                     raw.p.value = DEG.FLWMLW_DOWN.bp_result_fisher, 
+                                     topNodes = 50,
+                                     numChar = 120)
+
+write.csv(DEG.DOWN_BP.FLWMLW.table, "Results/UpDownSplit/DOWN/byontology/FLWMLW_DOWN_BPTerms.csv")
+```
+
+
+#### MF
+```{r mf_DEG_FLWMLW_down}
+DEgenes.FLWMLW_DOWN.GO.mf <- new("topGOdata",
+                description = paste("DEG Go", "MF", "FLWMLW", sep = "_"),
+                ontology = "MF",
+                # all downregulated genes in this comparison, genes of interest = 1
+                allGenes = GeneList_FLWMLW_down, 
+                geneSelectionFun = LFCgenes,
+                gene2GO = gene2mapping,
+                annot = annFUN.gene2GO)
+
+
+#Fisher Testing
+DEG.FLWMLW_DOWN.mf_result_fisher <- runTest(DEgenes.FLWMLW_DOWN.GO.mf, statistic = "fisher", algorithm = "weight01")
+DEG.FLWMLW_DOWN.mf_result_fisher
+
+DEG.DOWN_MF.FLWMLW.table <- GenTable(DEgenes.FLWMLW_DOWN.GO.mf, 
+                                     raw.p.value = DEG.FLWMLW_DOWN.mf_result_fisher, 
+                                     topNodes = 50, 
+                                     numChar = 120)
+
+write.csv(DEG.DOWN_MF.FLWMLW.table, "Results/UpDownSplit/DOWN/byontology/FLWMLW_DOWN_MFTerms.csv")
+```
+
+
+
+#### CC
+```{r cc_DEG_FLWMLW_down}
+DEgenes.FLWMLW_DOWN.GO.cc <- new("topGOdata",
+                description = paste("DEG Go", "CC", "FLWMLW", sep = "_"),
+                ontology = "CC",
+                # all downregulated genes in this comparison, genes of interest = 1
+                allGenes = GeneList_FLWMLW_down, 
+                geneSelectionFun = LFCgenes,
+                gene2GO = gene2mapping,
+                annot = annFUN.gene2GO)
+
+
+#Fisher Testing
+DEG.FLWMLW_DOWN.cc_result_fisher <- runTest(DEgenes.FLWMLW_DOWN.GO.cc, statistic = "fisher", algorithm = "weight01")
+DEG.FLWMLW_DOWN.cc_result_fisher
+
+DEG.DOWN_CC.FLWMLW.table <- GenTable(DEgenes.FLWMLW_DOWN.GO.cc, 
+                                     raw.p.value = DEG.FLWMLW_DOWN.cc_result_fisher, 
+                                     topNodes = 50,
+                                     numChar = 120)
+
+write.csv(DEG.DOWN_CC.FLWMLW.table, "Results/UpDownSplit/DOWN/byontology/FLWMLW_DOWN_CCTerms.csv")
+```
+
+```{r FLWMLWlargetable.DOWN}
+#ALL
+DEG.DOWN_BP.FLWMLW.table <- cbind(DEG.DOWN_BP.FLWMLW.table, ontology=rep("BP", length(DEG.DOWN_BP.FLWMLW.table$GO.ID)))
+DEG.DOWN_MF.FLWMLW.table <- cbind(DEG.DOWN_MF.FLWMLW.table, ontology=rep("MF", length(DEG.DOWN_MF.FLWMLW.table$GO.ID)))
+DEG.DOWN_CC.FLWMLW.table <- cbind(DEG.DOWN_CC.FLWMLW.table, ontology=rep("CC", length(DEG.DOWN_CC.FLWMLW.table$GO.ID)))
+
+DEG_GOallontology.FLWMLW.DOWNregulated <-rbind(DEG.DOWN_BP.FLWMLW.table, DEG.DOWN_MF.FLWMLW.table, DEG.DOWN_CC.FLWMLW.table)
+write.csv(DEG_GOallontology.FLWMLW.DOWNregulated, "Results/UpDownSplit/DOWN/ALL/DEGs_GOallontology_FLWMLW_downregulated.csv")
+
+
+#Less than .01
+DEG.DOWN_BP.FLWMLW.table.01 <- DEG.DOWN_BP.FLWMLW.table[DEG.DOWN_BP.FLWMLW.table$raw.p.value < 0.01,]
+DEG.DOWN_MF.FLWMLW.table.01 <- DEG.DOWN_MF.FLWMLW.table[DEG.DOWN_MF.FLWMLW.table$raw.p.value < 0.01,]
+DEG.DOWN_CC.FLWMLW.table.01 <- DEG.DOWN_CC.FLWMLW.table[DEG.DOWN_CC.FLWMLW.table$raw.p.value < 0.01,]
+
+DEG_GOallontology.FLWMLW.DOWNregulated.01 <-rbind(DEG.DOWN_BP.FLWMLW.table.01, DEG.DOWN_MF.FLWMLW.table.01, DEG.DOWN_CC.FLWMLW.table.01)
+write.csv(DEG_GOallontology.FLWMLW.DOWNregulated.01, "Results/UpDownSplit/point1percent/DEGs_GOallontology_FLWMLW_downregulated.01.csv")
+```
+
+
+
+```{r extractgenesforGOs.FLWMLW}
+#get results table
+results.FLWMLW <- list(BP.ALL = DEG_BP.FLWMLW.table,
+  BP.DOWN = DEG.DOWN_BP.FLWMLW.table,
+  MF.ALL = DEG_MF.FLWMLW.table,
+  MF.DOWN = DEG.DOWN_MF.FLWMLW.table,
+  CC.ALL = DEG_CC.FLWMLW.table,
+  CC.DOWN = DEG.DOWN_CC.FLWMLW.table
+)
+  
+#get a list of the godata objects
+GOdata_list.FLWMLW <- list(
+  BP.ALL = DEgenes.FLWMLW.GO.bp,
+  BP.DOWN = DEgenes.FLWMLW_DOWN.GO.bp,
+  MF.ALL = DEgenes.FLWMLW.GO.mf,
+  MF.DOWN = DEgenes.FLWMLW_DOWN.GO.mf,
+  CC.ALL = DEgenes.FLWMLW.GO.cc,
+  CC.DOWN = DEgenes.FLWMLW_DOWN.GO.cc
+)
+
+#geneID Extraction
+
+# Step 1: Filter significant GO terms (p < 0.01), handling scientific notation
+sig.terms_list.FLWMLW <- lapply(results.FLWMLW, function(tbl) {
+    # Ensure p-values are numeric (handles cases where they are character strings like "1.2e-5")
+    pvals <- as.numeric(tbl$raw.p.value)
+    
+    # Return GO.IDs with p < 0.01
+    tbl$GO.ID[which(pvals < 0.01)]
+})
+
+# Step 2: Extract significant genes per GO term from each GOdata object
+significant_genes_per_GO.FLWMLW <- mapply(function(GOdata, go_ids) {
+    # Get genes associated with each GO term
+    genes_per_GO <- genesInTerm(object = GOdata, whichGO = go_ids)
+    # Get significant genes from the GOdata object
+    sigGenesSet <- sigGenes(GOdata)
+    # Intersect genes in each GO term with the significant genes
+    lapply(genes_per_GO, function(genes) intersect(genes, sigGenesSet))
+  },
+GOdata_list.FLWMLW,
+sig.terms_list.FLWMLW,
+SIMPLIFY = FALSE)
+
+
+
+#plus terms
+# Make a named vector of GO terms (Term names), per group
+go_term_names_list.FLWMLW <- lapply(results.FLWMLW, function(tbl) {
+  setNames(tbl$Term, tbl$GO.ID)
+})
+
+
+
+####This is the function that will be used across PW comparisons
+#write_sig_genes_per_GO_to_excel()
+
+
+write_sig_genes_per_GO_to_excel(
+  sig_gene_list = significant_genes_per_GO.FLWMLW,
+  go_term_name_list = go_term_names_list.FLWMLW,
+  output_file = "Results/GenesPerGO/FLWMLW_significant_genes_per_GO.xlsx"
+)
+
+
+
+#Verify the overlap of genes between all, up, down
+#BP
+genesFLWMLW_BP_ALL <- unique(unlist(significant_genes_per_GO.FLWMLW$BP.ALL))
+genesFLWMLW_BP_DOWN <- unique(unlist(significant_genes_per_GO.FLWMLW$BP.DOWN))
+
+  #OVERLAP
+  intersect(genesFLWMLW_BP_ALL, genesFLWMLW_BP_DOWN)
+  table(genesFLWMLW_BP_DOWN %in% genesFLWMLW_BP_ALL)
+  table(genesFLWMLW_BP_DOWN %in% names(DEG.genelist.FLWMLW))
+
+
+
+#MF
+genesFLWMLW_MF_ALL <- unique(unlist(significant_genes_per_GO.FLWMLW$MF.ALL))
+genesFLWMLW_MF_DOWN <- unique(unlist(significant_genes_per_GO.FLWMLW$MF.DOWN))
+
+  #OVERLAP
+  intersect(genesFLWMLW_MF_ALL, genesFLWMLW_MF_DOWN)
+  table(genesFLWMLW_MF_DOWN %in% genesFLWMLW_MF_ALL)
+  table(genesFLWMLW_MF_DOWN %in% names(DEG.genelist.FLWMLW))
+
+
+
+#CC
+genesFLWMLW_CC_ALL <- unique(unlist(significant_genes_per_GO.FLWMLW$CC.ALL))
+genesFLWMLW_CC_DOWN <- unique(unlist(significant_genes_per_GO.FLWMLW$CC.DOWN))
+
+
+  #OVERLAP
+  intersect(genesFLWMLW_CC_ALL, genesFLWMLW_CC_DOWN)
+  table(genesFLWMLW_CC_DOWN %in% genesFLWMLW_CC_ALL)
+  table(genesFLWMLW_CC_DOWN %in% names(DEG.genelist.FLWMLW))
+
+
+```
+
+
+## Get Gene Lists for GO IDs of interest
+```{r saveforgenework}
+save(significant_genes_per_GO.FLQQLQ, significant_genes_per_GO.FLQMLQ, significant_genes_per_GO.FLWFLQ, significant_genes_per_GO.FLWMLW, significant_genes_per_GO.MLWMLQ, significant_genes_per_GO.QLWQLQ, file = "Results/GenesPerGO/SignificantGenesPerGO.Rdata")
+
+```
+
+
+### Create Vector of GO IDs of interest
+```{r GOIDs}
+#Use when not knitting whole docu
+load("Results/GenesPerGO/SignificantGenesPerGO.Rdata")
+
+GOvector <- c("GO:0007631", "GO:0019563", "GO:0004371", "GO:0004970", "GO:0022008", "GO:0045202", "GO:0004890", "GO:0007218", "GO:0062129", "GO:0035725", "GO:0019367", "GO:0034625", "GO:0034626", "GO:0042761", "GO:0006680", "GO:0006629", "GO:0005615", "GO:0034464", "GO:0004181", "GO:0071683", "GO:0007601", "GO:0007602","GO:0050911", "GO:0019230", "GO:0050954", "GO:0004984", "GO:0016499", "GO:0015179", "GO:0005576", "GO:0004707"
+
+)
+
+
+
+GeneObj <- list(
+  FLQQLQ=significant_genes_per_GO.FLQQLQ,
+  FLQMLQ=significant_genes_per_GO.FLQMLQ,
+  FLWFLQ=significant_genes_per_GO.FLWFLQ,
+  FLWMLW=significant_genes_per_GO.FLWMLW,
+  MLWMLQ=significant_genes_per_GO.MLWMLQ,
+  QLWQLQ=significant_genes_per_GO.QLWQLQ
+)
+```
+
+
+### Function to Isolate Genes for GOs of interest
+```{r GOIDstoGENES, include=FALSE}
+extract_genes_by_go <- function(go_terms, objects) {
+  if (!is.list(objects)) stop("`objects` must be a list of GO objects")
+  
+  result <- lapply(go_terms, function(go) {
+    # collect genes from all objects and all slots
+    all_genes <- unlist(lapply(names(objects), function(obj_name) {
+      obj <- objects[[obj_name]]
+      
+      # loop through all slots in this object
+      genes_in_obj <- unlist(lapply(names(obj), function(slot_name) {
+        slot_obj <- obj[[slot_name]]
+        if (go %in% names(slot_obj)) {
+          return(slot_obj[[go]])
+        } else {
+          message("GO term ", go, " not found in ", obj_name, " (", slot_name, ")")
+          return(character(0))
+        }
+      }))
+      
+      return(genes_in_obj)
+    }))
+    
+    return(unique(all_genes))
+  })
+  
+  # Clean names: remove ":" from GO IDs
+  names(result) <- gsub(":", "", go_terms)
+  return(result)
+}
+
+
+genes_byGO <- extract_genes_by_go(go_terms = GOvector, objects = GeneObj)
+```
+
+
+```{r loadincountdata}
+#load in the same count matrix used for WGCNA
+rawCounts0 <- read.csv2("../../../RNASeqAnalysis/BimpMB_RNAanalysis/Filtering/GECountData_GenesOutliers_Filtered.csv", sep=";")
+head(rawCounts0)
+dim(rawCounts0)
+
+
+#Read in with samples as column names and gene as column 1
+
+
+
+#load in the sample mappings
+sampleData0 <- read.delim("../../../RNASeqAnalysis/BimpMB_RNAanalysis/Filtering/sampleData_OutliersRemoved.csv", sep=";")
+head(sampleData0)
+
+# Also save a copy for later
+#sampleData <- sampleData0
+```
+
+```{r dosomereformating}
+
+rawCounts <- rawCounts0
+rownames(rawCounts) <- rawCounts$X
+rawCounts <- rawCounts[,-1]
+
+sampleData <- sampleData0
+rownames(sampleData) <- sampleData$sample_id
+sampleData <- sampleData[,1:2]
+
+
+counts_pm <- cpm(rawCounts, log=TRUE)
+# Make counts_pm a data frame and keep gene names
+counts_df <- counts_pm %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "gene")
+
+```
+
+
+## Compare Counts (pm) of genes of interest
+### GO:0007631 - FEEDING BEHAVIOR
+```{r FBgenes}
+FBGene <- genes_byGO$GO0007631
+
+FBGeneCounts_lcpm <- counts_df %>%
+  filter(gene %in% FBGene)
+
+#as.data.frame
+#as.data.frame(FBGeneCounts_lcpm)
+#colnames(FBGeneCounts_lcpm) <- FBGene[1]
+
+
+# Pivot longer so each row is gene × sample
+FBGeneCounts_lcpm_long <- FBGeneCounts_lcpm %>%
+  pivot_longer(-gene, names_to = "sample_id", values_to = "expression")
+
+# Join metadata
+FBGeneCounts_lcpm_long <- FBGeneCounts_lcpm_long %>%
+  left_join(sampleData, by = c("sample_id" = "sample_id"))
+
+FBGeneCounts_lcpm_long$tx_group <- factor(FBGeneCounts_lcpm_long$tx_group, levels= c("FLW", "FLQ", "MLW", "MLQ", "QLW", "QLQ"))
+
+
+#Make PLOT
+ggplot(FBGeneCounts_lcpm_long, aes(x = tx_group, y = expression, fill = tx_group)) + #, label = sample_id)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+  geom_jitter(width = 0.2, alpha = 0.5) +
+  #geom_text(position = position_jitter(seed = 1)) +
+  #facet_wrap(~Gene, scales = "free_y") + # One plot per gene
+  theme_minimal() +
+    labs(
+    title = "Gene: LOC100742013 (GO:0007631-FEEDING BEHAVIOR)",
+    x = "Treatment Group",
+    y = "Log-CPM Expression"
+    ) +
+theme(axis.text.x = element_text(angle = 45, hjust = 1),
+      plot.title = element_text(hjust = 0.5))
+
+```
+
+
+
+### GO:00016499 - OREXIN RECEPTOR ACTIVITY (MF)
+```{r ORAGenes, fig.height=6}
+ORAGenes <- genes_byGO$GO0016499
+
+ORAGenesCounts_lcpm <- counts_df %>%
+  filter(gene %in% ORAGenes)
+
+#as.data.frame
+#as.data.frame(FBGeneCounts_lcpm)
+#colnames(FBGeneCounts_lcpm) <- FBGene[1]
+
+
+# Pivot longer so each row is gene × sample
+ORAGenesCounts_lcpm_long <- ORAGenesCounts_lcpm %>%
+  pivot_longer(-gene, names_to = "sample_id", values_to = "expression")
+
+# Join metadata
+ORAGenesCounts_lcpm_long <- ORAGenesCounts_lcpm_long %>%
+  left_join(sampleData, by = c("sample_id" = "sample_id"))
+
+ORAGenesCounts_lcpm_long$tx_group <- factor(ORAGenesCounts_lcpm_long$tx_group, levels= c("FLW", "FLQ", "MLW", "MLQ", "QLW", "QLQ"))
+
+
+#Make PLOT
+# Multipanel plot for all genes in this GO term
+ggplot(ORAGenesCounts_lcpm_long, aes(x = tx_group, y = expression, fill = tx_group)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+  geom_jitter(width = 0.2, alpha = 0.5) +
+  facet_wrap(~gene, scales = "free_y", ncol=2) +  # one panel per gene
+  theme_minimal() +
+  labs(
+    title = "GO:00016499 - orexin receptor activity",
+    x = "Treatment Group",
+    y = "Log-CPM Expression"
+  ) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(hjust = 0.5),
+    strip.text = element_text(size = 10) # facet labels
+  )
+
+```
+
+
+
+### GO:0007218 - NEUROPEPTIDE SIGNALLING
+```{r NPGenes}
+NPGene <- genes_byGO$GO0007218
+
+NPGeneCounts_lcpm <- counts_df %>%
+  filter(gene %in% NPGene)
+
+#as.data.frame
+#as.data.frame(NPGeneCounts_lcpm)
+#colnames(NPGeneCounts_lcpm) <- NPGene[1]
+
+
+# Pivot longer so each row is gene × sample
+NPGeneCounts_lcpm_long <- NPGeneCounts_lcpm %>%
+  pivot_longer(-gene, names_to = "sample_id", values_to = "expression")
+
+# Join metadata
+NPGeneCounts_lcpm_long <- NPGeneCounts_lcpm_long %>%
+  left_join(sampleData, by = c("sample_id" = "sample_id"))
+
+NPGeneCounts_lcpm_long$tx_group <- factor(NPGeneCounts_lcpm_long$tx_group, levels= c("FLW", "FLQ", "MLW", "MLQ", "QLW", "QLQ"))
+
+
+#Make PLOT
+ggplot(NPGeneCounts_lcpm_long, aes(x = tx_group, y = expression, fill = tx_group)) + #, label = sample_id)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+  geom_jitter(width = 0.2, alpha = 0.5) +
+  #geom_text(position = position_jitter(seed = 1)) +
+  #facet_wrap(~Gene, scales = "free_y") + # One plot per gene
+  theme_minimal() +
+    labs(
+    title = "Gene: LOC100745005 (GO:0007218 - Neuropeptide Signalling)",
+    x = "Treatment Group",
+    y = "Log-CPM Expression"
+    ) +
+theme(axis.text.x = element_text(angle = 45, hjust = 1),
+      plot.title = element_text(hjust = 0.5))
+
+```
+
+
+
+### GO:0022008 - NEUROGENESIS
+```{r NGGenes, fig.height=9}
+NGGenes <- genes_byGO$GO0022008
+
+NGGenesCounts_lcpm <- counts_df %>%
+  filter(gene %in% NGGenes)
+
+#as.data.frame
+#as.data.frame(FBGeneCounts_lcpm)
+#colnames(FBGeneCounts_lcpm) <- FBGene[1]
+
+
+# Pivot longer so each row is gene × sample
+NGGenesCounts_lcpm_long <- NGGenesCounts_lcpm %>%
+  pivot_longer(-gene, names_to = "sample_id", values_to = "expression")
+
+# Join metadata
+NGGenesCounts_lcpm_long <- NGGenesCounts_lcpm_long %>%
+  left_join(sampleData, by = c("sample_id" = "sample_id"))
+
+NGGenesCounts_lcpm_long$tx_group <- factor(NGGenesCounts_lcpm_long$tx_group, levels= c("FLW", "FLQ", "MLW", "MLQ", "QLW", "QLQ"))
+
+
+#Make PLOT
+ggplot(NGGenesCounts_lcpm_long, aes(x = tx_group, y = expression, fill = tx_group)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+  geom_jitter(width = 0.2, alpha = 0.5) +
+  facet_wrap(~gene, scales = "free_y", ncol=2) +  # one panel per gene
+  theme_minimal() +
+  labs(
+    title = "GO:0022008 - Neurogenesis (BP)",
+    x = "Treatment Group",
+    y = "Log-CPM Expression"
+  ) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(hjust = 0.5),
+    strip.text = element_text(size = 10) # facet labels
+  )
+```
+
+
+
+
+
+### GO:0045202 - SYNAPSE
+```{r SynGenes, fig.height=9}
+SynGenes <- genes_byGO$GO0045202
+
+SynGenesCounts_lcpm <- counts_df %>%
+  filter(gene %in% SynGenes)
+
+#as.data.frame
+#as.data.frame(FBGeneCounts_lcpm)
+#colnames(FBGeneCounts_lcpm) <- FBGene[1]
+
+
+# Pivot longer so each row is gene × sample
+SynGenesCounts_lcpm_long <- SynGenesCounts_lcpm %>%
+  pivot_longer(-gene, names_to = "sample_id", values_to = "expression")
+
+# Join metadata
+SynGenesCounts_lcpm_long <- SynGenesCounts_lcpm_long %>%
+  left_join(sampleData, by = c("sample_id" = "sample_id"))
+
+SynGenesCounts_lcpm_long$tx_group <- factor(SynGenesCounts_lcpm_long$tx_group, levels= c("FLW", "FLQ", "MLW", "MLQ", "QLW", "QLQ"))
+
+
+#Make PLOT
+ggplot(SynGenesCounts_lcpm_long, aes(x = tx_group, y = expression, fill = tx_group)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+  geom_jitter(width = 0.2, alpha = 0.5) +
+  facet_wrap(~gene, scales = "free_y", ncol=2) +  # one panel per gene
+  theme_minimal() +
+  labs(
+    title = "GO:0045202 - Synapse (CC)",
+    x = "Treatment Group",
+    y = "Log-CPM Expression"
+  ) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(hjust = 0.5),
+    strip.text = element_text(size = 10) # facet labels
+  )
+```
+
+
+
+### GO:0004707 - MAP KINASE ACTIVITY
+```{r MAPGenes, fig.height=9}
+MAPGenes <- genes_byGO$GO0004707
+
+MAPGenesCounts_lcpm <- counts_df %>%
+  filter(gene %in% MAPGenes)
+
+#as.data.frame
+#as.data.frame(FBGeneCounts_lcpm)
+#colnames(FBGeneCounts_lcpm) <- FBGene[1]
+
+
+# Pivot longer so each row is gene × sample
+MAPGenesCounts_lcpm_long <- MAPGenesCounts_lcpm %>%
+  pivot_longer(-gene, names_to = "sample_id", values_to = "expression")
+
+# Join metadata
+MAPGenesCounts_lcpm_long <- MAPGenesCounts_lcpm_long %>%
+  left_join(sampleData, by = c("sample_id" = "sample_id"))
+
+MAPGenesCounts_lcpm_long$tx_group <- factor(MAPGenesCounts_lcpm_long$tx_group, levels= c("FLW", "FLQ", "MLW", "MLQ", "QLW", "QLQ"))
+
+
+#Make PLOT
+ggplot(MAPGenesCounts_lcpm_long, aes(x = tx_group, y = expression, fill = tx_group)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+  geom_jitter(width = 0.2, alpha = 0.5) +
+  facet_wrap(~gene, scales = "free_y", ncol=2) +  # one panel per gene
+  theme_minimal() +
+  labs(
+    title = "GO:0004707 - MAP kinase activity (MF)",
+    x = "Treatment Group",
+    y = "Log-CPM Expression"
+  ) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(hjust = 0.5),
+    strip.text = element_text(size = 10) # facet labels
+  )
+```
+
+
+
+
+### GO:0035725 - SODIUM ION TRANSMEMBRANE TRANSPORT
+```{r SITTGenes, fig.height=8}
+SITTGenes <- genes_byGO$GO0035725
+
+SITTGenesCounts_lcpm <- counts_df %>%
+  filter(gene %in% SITTGenes)
+
+#as.data.frame
+#as.data.frame(FBGeneCounts_lcpm)
+#colnames(FBGeneCounts_lcpm) <- FBGene[1]
+
+
+# Pivot longer so each row is gene × sample
+SITTGenesCounts_lcpm_long <- SITTGenesCounts_lcpm %>%
+  pivot_longer(-gene, names_to = "sample_id", values_to = "expression")
+
+# Join metadata
+SITTGenesCounts_lcpm_long <- SITTGenesCounts_lcpm_long %>%
+  left_join(sampleData, by = c("sample_id" = "sample_id"))
+
+SITTGenesCounts_lcpm_long$tx_group <- factor(SITTGenesCounts_lcpm_long$tx_group, levels= c("FLW", "FLQ", "MLW", "MLQ", "QLW", "QLQ"))
+
+
+#Make PLOT
+# Multipanel plot for all genes in this GO term
+ggplot(SITTGenesCounts_lcpm_long, aes(x = tx_group, y = expression, fill = tx_group)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+  geom_jitter(width = 0.2, alpha = 0.5) +
+  facet_wrap(~gene, scales = "free_y", ncol=2) +  # one panel per gene
+  theme_minimal() +
+  labs(
+    title = "GO:0035725 - sodium ion transmembrane transport",
+    x = "Treatment Group",
+    y = "Log-CPM Expression"
+  ) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(hjust = 0.5),
+    strip.text = element_text(size = 10) # facet labels
+  )
+
+```
+
+
+
+### GO:0004970 - GLUTAMATE-GATED RECEPTOR ACTIVITY
+```{r GGRAGenes, fig.height=9}
+GGRAGenes <- genes_byGO$GO0004970
+
+GGRAGenesCounts_lcpm <- counts_df %>%
+  filter(gene %in% GGRAGenes)
+
+#as.data.frame
+#as.data.frame(FBGeneCounts_lcpm)
+#colnames(FBGeneCounts_lcpm) <- FBGene[1]
+
+
+# Pivot longer so each row is gene × sample
+GGRAGenesCounts_lcpm_long <- GGRAGenesCounts_lcpm %>%
+  pivot_longer(-gene, names_to = "sample_id", values_to = "expression")
+
+# Join metadata
+GGRAGenesCounts_lcpm_long <- GGRAGenesCounts_lcpm_long %>%
+  left_join(sampleData, by = c("sample_id" = "sample_id"))
+
+GGRAGenesCounts_lcpm_long$tx_group <- factor(GGRAGenesCounts_lcpm_long$tx_group, levels= c("FLW", "FLQ", "MLW", "MLQ", "QLW", "QLQ"))
+
+
+#Make PLOT
+# Multipanel plot for all genes in this GO term
+ggplot(GGRAGenesCounts_lcpm_long, aes(x = tx_group, y = expression, fill = tx_group)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+  geom_jitter(width = 0.2, alpha = 0.5) +
+  facet_wrap(~gene, scales = "free_y", ncol=2) +  # one panel per gene
+  theme_minimal() +
+  labs(
+    title = "GO:0004970 - Glutamate-gated receptor activity",
+    x = "Treatment Group",
+    y = "Log-CPM Expression"
+  ) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(hjust = 0.5),
+    strip.text = element_text(size = 10) # facet labels
+  )
+
+```
+
+
+
+
+### GO:0004890 - GABA-A RECEPTOR ACTIVITY
+```{r GARAGenes, fig.height=3}
+GARAGenes <- genes_byGO$GO0004890
+
+GARAGenesCounts_lcpm <- counts_df %>%
+  filter(gene %in% GARAGenes)
+
+#as.data.frame
+#as.data.frame(FBGeneCounts_lcpm)
+#colnames(FBGeneCounts_lcpm) <- FBGene[1]
+
+
+# Pivot longer so each row is gene × sample
+GARAGenesCounts_lcpm_long <- GARAGenesCounts_lcpm %>%
+  pivot_longer(-gene, names_to = "sample_id", values_to = "expression")
+
+# Join metadata
+GARAGenesCounts_lcpm_long <- GARAGenesCounts_lcpm_long %>%
+  left_join(sampleData, by = c("sample_id" = "sample_id"))
+
+GARAGenesCounts_lcpm_long$tx_group <- factor(GARAGenesCounts_lcpm_long$tx_group, levels= c("FLW", "FLQ", "MLW", "MLQ", "QLW", "QLQ"))
+
+
+#Make PLOT
+# Multipanel plot for all genes in this GO term
+ggplot(GARAGenesCounts_lcpm_long, aes(x = tx_group, y = expression, fill = tx_group)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+  geom_jitter(width = 0.2, alpha = 0.5) +
+  facet_wrap(~gene, scales = "free_y") +  # one panel per gene
+  theme_minimal() +
+  labs(
+    title = "GO:0004890 - GABA-A receptor activity",
+    x = "Treatment Group",
+    y = "Log-CPM Expression"
+  ) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(hjust = 0.5),
+    strip.text = element_text(size = 10) # facet labels
+  )
+
+```
+
+
+
+### GO:0034464 - BBSome
+```{r BBSomeGenes, fig.height=6}
+BBSomeGenes <- genes_byGO$GO0034464
+
+BBSomeGenesCounts_lcpm <- counts_df %>%
+  filter(gene %in% BBSomeGenes)
+
+#as.data.frame
+#as.data.frame(FBGeneCounts_lcpm)
+#colnames(FBGeneCounts_lcpm) <- FBGene[1]
+
+
+# Pivot longer so each row is gene × sample
+BBSomeGenesCounts_lcpm_long <- BBSomeGenesCounts_lcpm %>%
+  pivot_longer(-gene, names_to = "sample_id", values_to = "expression")
+
+# Join metadata
+BBSomeGenesCounts_lcpm_long <- BBSomeGenesCounts_lcpm_long %>%
+  left_join(sampleData, by = c("sample_id" = "sample_id"))
+
+BBSomeGenesCounts_lcpm_long$tx_group <- factor(BBSomeGenesCounts_lcpm_long$tx_group, levels= c("FLW", "FLQ", "MLW", "MLQ", "QLW", "QLQ"))
+
+
+#Make PLOT
+# Multipanel plot for all genes in this GO term
+ggplot(BBSomeGenesCounts_lcpm_long, aes(x = tx_group, y = expression, fill = tx_group)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+  geom_jitter(width = 0.2, alpha = 0.5) +
+  facet_wrap(~gene, scales = "free_y", ncol=2) +  # one panel per gene
+  theme_minimal() +
+  labs(
+    title = "GO:0034464 - BBSome",
+    x = "Treatment Group",
+    y = "Log-CPM Expression"
+  ) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(hjust = 0.5),
+    strip.text = element_text(size = 10) # facet labels
+  )
+
+```
+
+
+
+### GO:0071683 - SENSORY DENDRITE
+```{r SDGenes, fig.height=6}
+SDGenes <- genes_byGO$GO0071683
+
+SDGenesCounts_lcpm <- counts_df %>%
+  filter(gene %in% SDGenes)
+
+#as.data.frame
+#as.data.frame(FBGeneCounts_lcpm)
+#colnames(FBGeneCounts_lcpm) <- FBGene[1]
+
+
+# Pivot longer so each row is gene × sample
+SDGenesCounts_lcpm_long <- SDGenesCounts_lcpm %>%
+  pivot_longer(-gene, names_to = "sample_id", values_to = "expression")
+
+# Join metadata
+SDGenesCounts_lcpm_long <- SDGenesCounts_lcpm_long %>%
+  left_join(sampleData, by = c("sample_id" = "sample_id"))
+
+SDGenesCounts_lcpm_long$tx_group <- factor(SDGenesCounts_lcpm_long$tx_group, levels= c("FLW", "FLQ", "MLW", "MLQ", "QLW", "QLQ"))
+
+
+#Make PLOT
+# Multipanel plot for all genes in this GO term
+ggplot(SDGenesCounts_lcpm_long, aes(x = tx_group, y = expression, fill = tx_group)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+  geom_jitter(width = 0.2, alpha = 0.5) +
+  facet_wrap(~gene, scales = "free_y", ncol=2) +  # one panel per gene
+  theme_minimal() +
+  labs(
+    title = "GO:0071683 - sensory dendrite",
+    x = "Treatment Group",
+    y = "Log-CPM Expression"
+  ) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(hjust = 0.5),
+    strip.text = element_text(size = 10) # facet labels
+  )
+
+```
+
+
+
+
+### GO:0019230 - PROPRIOCEPTION
+```{r PRGenes, fig.height=6}
+PRGenes <- genes_byGO$GO0019230
+
+PRGenesCounts_lcpm <- counts_df %>%
+  filter(gene %in% PRGenes)
+
+#as.data.frame
+#as.data.frame(FBGeneCounts_lcpm)
+#colnames(FBGeneCounts_lcpm) <- FBGene[1]
+
+
+# Pivot longer so each row is gene × sample
+PRGenesCounts_lcpm_long <- PRGenesCounts_lcpm %>%
+  pivot_longer(-gene, names_to = "sample_id", values_to = "expression")
+
+# Join metadata
+PRGenesCounts_lcpm_long <- PRGenesCounts_lcpm_long %>%
+  left_join(sampleData, by = c("sample_id" = "sample_id"))
+
+PRGenesCounts_lcpm_long$tx_group <- factor(PRGenesCounts_lcpm_long$tx_group, levels= c("FLW", "FLQ", "MLW", "MLQ", "QLW", "QLQ"))
+
+
+#Make PLOT
+# Multipanel plot for all genes in this GO term
+ggplot(PRGenesCounts_lcpm_long, aes(x = tx_group, y = expression, fill = tx_group)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+  geom_jitter(width = 0.2, alpha = 0.5) +
+  facet_wrap(~gene, scales = "free_y", ncol=2) +  # one panel per gene
+  theme_minimal() +
+  labs(
+    title = "GO:0019230 - proprioception",
+    x = "Treatment Group",
+    y = "Log-CPM Expression"
+  ) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(hjust = 0.5),
+    strip.text = element_text(size = 10) # facet labels
+  )
+
+```
+
+
+
+
+
+### GO:0050954 - Sensory Perception of mechanical stimuli
+```{r PMSGenes, fig.height=6}
+PMSGenes <- genes_byGO$GO0050954
+
+PMSGenesCounts_lcpm <- counts_df %>%
+  filter(gene %in% PMSGenes)
+
+#as.data.frame
+#as.data.frame(FBGeneCounts_lcpm)
+#colnames(FBGeneCounts_lcpm) <- FBGene[1]
+
+
+# Pivot longer so each row is gene × sample
+PMSGenesCounts_lcpm_long <- PMSGenesCounts_lcpm %>%
+  pivot_longer(-gene, names_to = "sample_id", values_to = "exPMSession")
+
+# Join metadata
+PMSGenesCounts_lcpm_long <- PMSGenesCounts_lcpm_long %>%
+  left_join(sampleData, by = c("sample_id" = "sample_id"))
+
+PMSGenesCounts_lcpm_long$tx_group <- factor(PMSGenesCounts_lcpm_long$tx_group, levels= c("FLW", "FLQ", "MLW", "MLQ", "QLW", "QLQ"))
+
+
+#Make PLOT
+# Multipanel plot for all genes in this GO term
+ggplot(PMSGenesCounts_lcpm_long, aes(x = tx_group, y = exPMSession, fill = tx_group)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+  geom_jitter(width = 0.2, alpha = 0.5) +
+  facet_wrap(~gene, scales = "free_y", ncol=2) +  # one panel per gene
+  theme_minimal() +
+  labs(
+    title = "GO:0050954 - Sensory perception of mechanical stimuli",
+    x = "Treatment Group",
+    y = "Log-CPM Expression"
+  ) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(hjust = 0.5),
+    strip.text = element_text(size = 10) # facet labels
+  )
+
+```
+
+
+
+
+### GO:0007601; GO:0007602 - VISUAL PERCEPTION AND PHOTOTRANSDUCTION
+```{r VPPGenes, fig.height=6}
+VPPGenes <- c(genes_byGO$GO0007601, genes_byGO$GO0007602)
+
+VPPGenesCounts_lcpm <- counts_df %>%
+  filter(gene %in% VPPGenes)
+
+#as.data.frame
+#as.data.frame(FBGeneCounts_lcpm)
+#colnames(FBGeneCounts_lcpm) <- FBGene[1]
+
+
+# Pivot longer so each row is gene × sample
+VPPGenesCounts_lcpm_long <- VPPGenesCounts_lcpm %>%
+  pivot_longer(-gene, names_to = "sample_id", values_to = "exVPPession")
+
+# Join metadata
+VPPGenesCounts_lcpm_long <- VPPGenesCounts_lcpm_long %>%
+  left_join(sampleData, by = c("sample_id" = "sample_id"))
+
+VPPGenesCounts_lcpm_long$tx_group <- factor(VPPGenesCounts_lcpm_long$tx_group, levels= c("FLW", "FLQ", "MLW", "MLQ", "QLW", "QLQ"))
+
+
+#Make PLOT
+# Multipanel plot for all genes in this GO term
+ggplot(VPPGenesCounts_lcpm_long, aes(x = tx_group, y = exVPPession, fill = tx_group)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+  geom_jitter(width = 0.2, alpha = 0.5) +
+  facet_wrap(~gene, scales = "free_y", ncol=2) +  # one panel per gene
+  theme_minimal() +
+  labs(
+    title = "GO:0007601 - Visual perception (both genes) & GO:0007602 - phototransduction (LOC100746131)",
+    x = "Treatment Group",
+    y = "Log-CPM Expression"
+  ) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(hjust = 0.5),
+    strip.text = element_text(size = 10) # facet labels
+  )
+
+```
+
+
+
+
+### GO:0050911; GO:0004984 - detection of chemical signal for smell perception & olfactory receptor activity
+```{r SPOGenes, fig.height=6}
+SPOGenes <- c(genes_byGO$GO0050911, genes_byGO$GO0004984)
+
+SPOGenesCounts_lcpm <- counts_df %>%
+  filter(gene %in% SPOGenes)
+
+#as.data.frame
+#as.data.frame(FBGeneCounts_lcpm)
+#colnames(FBGeneCounts_lcpm) <- FBGene[1]
+
+
+# Pivot longer so each row is gene × sample
+SPOGenesCounts_lcpm_long <- SPOGenesCounts_lcpm %>%
+  pivot_longer(-gene, names_to = "sample_id", values_to = "exSPOession")
+
+# Join metadata
+SPOGenesCounts_lcpm_long <- SPOGenesCounts_lcpm_long %>%
+  left_join(sampleData, by = c("sample_id" = "sample_id"))
+
+SPOGenesCounts_lcpm_long$tx_group <- factor(SPOGenesCounts_lcpm_long$tx_group, levels= c("FLW", "FLQ", "MLW", "MLQ", "QLW", "QLQ"))
+
+
+#Make PLOT
+# Multipanel plot for all genes in this GO term
+ggplot(SPOGenesCounts_lcpm_long, aes(x = tx_group, y = exSPOession, fill = tx_group)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+  geom_jitter(width = 0.2, alpha = 0.5) +
+  facet_wrap(~gene, scales = "free_y", ncol=2) +  # one panel per gene
+  theme_minimal() +
+  labs(
+    title = "GO:0050911; GO:0004984 - detection of chemical signal for smell perception & olfactory receptor activity",
+    x = "Treatment Group",
+    y = "Log-CPM Expression"
+  ) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(hjust = 0.5),
+    strip.text = element_text(size = 10) # facet labels
+  )
+
+```
+
+
+
+
+### GO:0004181 - METALLOCARBOXYPEPTIDASE ACTIVITY
+```{r MCPGenes, fig.height=6}
+MCPGenes <- genes_byGO$GO0004181
+
+MCPGenesCounts_lcpm <- counts_df %>%
+  filter(gene %in% MCPGenes)
+
+#as.data.frame
+#as.data.frame(FBGeneCounts_lcpm)
+#colnames(FBGeneCounts_lcpm) <- FBGene[1]
+
+
+# Pivot longer so each row is gene × sample
+MCPGenesCounts_lcpm_long <- MCPGenesCounts_lcpm %>%
+  pivot_longer(-gene, names_to = "sample_id", values_to = "expression")
+
+# Join metadata
+MCPGenesCounts_lcpm_long <- MCPGenesCounts_lcpm_long %>%
+  left_join(sampleData, by = c("sample_id" = "sample_id"))
+
+MCPGenesCounts_lcpm_long$tx_group <- factor(MCPGenesCounts_lcpm_long$tx_group, levels= c("FLW", "FLQ", "MLW", "MLQ", "QLW", "QLQ"))
+
+
+#Make PLOT
+# Multipanel plot for all genes in this GO term
+ggplot(MCPGenesCounts_lcpm_long, aes(x = tx_group, y = expression, fill = tx_group)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+  geom_jitter(width = 0.2, alpha = 0.5) +
+  facet_wrap(~gene, scales = "free_y") +  # one panel per gene
+  theme_minimal() +
+  labs(
+    title = "GO:0004181 - Metallocarboxypeptidase Activity",
+    x = "Treatment Group",
+    y = "Log-CPM Expression"
+  ) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(hjust = 0.5),
+    strip.text = element_text(size = 10) # facet labels
+  )
+
+```
+
+
+
+
+
+
+
+
+
+### GO:0006629 - LIPID METABOLIC PROCESS
+```{r LMPGenes, fig.height=9}
+LMPGenes <- genes_byGO$GO0006629
+
+LMPGenesCounts_lcpm <- counts_df %>%
+  filter(gene %in% LMPGenes)
+
+#as.data.frame
+#as.data.frame(FBGeneCounts_lcpm)
+#colnames(FBGeneCounts_lcpm) <- FBGene[1]
+
+
+# Pivot longer so each row is gene × sample
+LMPGenesCounts_lcpm_long <- LMPGenesCounts_lcpm %>%
+  pivot_longer(-gene, names_to = "sample_id", values_to = "expression")
+
+# Join metadata
+LMPGenesCounts_lcpm_long <- LMPGenesCounts_lcpm_long %>%
+  left_join(sampleData, by = c("sample_id" = "sample_id"))
+
+LMPGenesCounts_lcpm_long$tx_group <- factor(LMPGenesCounts_lcpm_long$tx_group, levels= c("FLW", "FLQ", "MLW", "MLQ", "QLW", "QLQ"))
+
+
+#Make PLOT
+# Multipanel plot for all genes in this GO term
+ggplot(LMPGenesCounts_lcpm_long, aes(x = tx_group, y = expression, fill = tx_group)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+  geom_jitter(width = 0.2, alpha = 0.5) +
+  facet_wrap(~gene, scales = "free_y", ncol=2) +  # one panel per gene
+  theme_minimal() +
+  labs(
+    title = "GO:0006629 - lipid metabolic process",
+    x = "Treatment Group",
+    y = "Log-CPM Expression"
+  ) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(hjust = 0.5),
+    strip.text = element_text(size = 10) # facet labels
+  )
+
+```
+
+
+
+### GO:0006680 - GLUCOSYLCERAMIDE CATABOLIC PROCESS
+```{r GluCPGenes, fig.height=5}
+GluCPGenes <- genes_byGO$GO0006680
+
+GluCPGenesCounts_lcpm <- counts_df %>%
+  filter(gene %in% GluCPGenes)
+
+#as.data.frame
+#as.data.frame(FBGeneCounts_lcpm)
+#colnames(FBGeneCounts_lcpm) <- FBGene[1]
+
+
+# Pivot longer so each row is gene × sample
+GluCPGenesCounts_lcpm_long <- GluCPGenesCounts_lcpm %>%
+  pivot_longer(-gene, names_to = "sample_id", values_to = "expression")
+
+# Join metadata
+GluCPGenesCounts_lcpm_long <- GluCPGenesCounts_lcpm_long %>%
+  left_join(sampleData, by = c("sample_id" = "sample_id"))
+
+GluCPGenesCounts_lcpm_long$tx_group <- factor(GluCPGenesCounts_lcpm_long$tx_group, levels= c("FLW", "FLQ", "MLW", "MLQ", "QLW", "QLQ"))
+
+
+#Make PLOT
+# Multipanel plot for all genes in this GO term
+ggplot(GluCPGenesCounts_lcpm_long, aes(x = tx_group, y = expression, fill = tx_group)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+  geom_jitter(width = 0.2, alpha = 0.5) +
+  facet_wrap(~gene, scales = "free_y") +  # one panel per gene
+  theme_minimal() +
+  labs(
+    title = "GO:0006680 - Glucosylceramide Catabolic Process",
+    x = "Treatment Group",
+    y = "Log-CPM Expression"
+  ) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(hjust = 0.5),
+    strip.text = element_text(size = 10) # facet labels
+  )
+
+```
+
+
+
+
+
+### GO:0019563 - GLYCEROL CATABOLIC PROCESS
+```{r GCPGenes, fig.height=6}
+GCPGenes <- genes_byGO$GO0019563
+
+GCPGenesCounts_lcpm <- counts_df %>%
+  filter(gene %in% GCPGenes)
+
+#as.data.frame
+#as.data.frame(FBGeneCounts_lcpm)
+#colnames(FBGeneCounts_lcpm) <- FBGene[1]
+
+
+# Pivot longer so each row is gene × sample
+GCPGenesCounts_lcpm_long <- GCPGenesCounts_lcpm %>%
+  pivot_longer(-gene, names_to = "sample_id", values_to = "expression")
+
+# Join metadata
+GCPGenesCounts_lcpm_long <- GCPGenesCounts_lcpm_long %>%
+  left_join(sampleData, by = c("sample_id" = "sample_id"))
+
+GCPGenesCounts_lcpm_long$tx_group <- factor(GCPGenesCounts_lcpm_long$tx_group, levels= c("FLW", "FLQ", "MLW", "MLQ", "QLW", "QLQ"))
+
+
+#Make PLOT
+# Multipanel plot for all genes in this GO term
+ggplot(GCPGenesCounts_lcpm_long, aes(x = tx_group, y = expression, fill = tx_group)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+  geom_jitter(width = 0.2, alpha = 0.5) +
+  facet_wrap(~gene, scales = "free_y") +  # one panel per gene
+  theme_minimal() +
+  labs(
+    title = "GO:0019563 - Glycerol Catabolic Process",
+    x = "Treatment Group",
+    y = "Log-CPM Expression"
+  ) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(hjust = 0.5),
+    strip.text = element_text(size = 10) # facet labels
+  )
+
+```
+ 
+
+
+
+
+
+### GO:0004371 - GLYCERONE KINASE ACTIVITY
+```{r GKAGenes, fig.height=6}
+GKAGenes <- genes_byGO$GO0004371
+
+GKAGenesCounts_lcpm <- counts_df %>%
+  filter(gene %in% GKAGenes)
+
+#as.data.frame
+#as.data.frame(FBGeneCounts_lcpm)
+#colnames(FBGeneCounts_lcpm) <- FBGene[1]
+
+
+# Pivot longer so each row is gene × sample
+GKAGenesCounts_lcpm_long <- GKAGenesCounts_lcpm %>%
+  pivot_longer(-gene, names_to = "sample_id", values_to = "expression")
+
+# Join metadata
+GKAGenesCounts_lcpm_long <- GKAGenesCounts_lcpm_long %>%
+  left_join(sampleData, by = c("sample_id" = "sample_id"))
+
+GKAGenesCounts_lcpm_long$tx_group <- factor(GKAGenesCounts_lcpm_long$tx_group, levels= c("FLW", "FLQ", "MLW", "MLQ", "QLW", "QLQ"))
+
+
+#Make PLOT
+# Multipanel plot for all genes in this GO term
+ggplot(GKAGenesCounts_lcpm_long, aes(x = tx_group, y = expression, fill = tx_group)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+  geom_jitter(width = 0.2, alpha = 0.5) +
+  facet_wrap(~gene, scales = "free_y") +  # one panel per gene
+  theme_minimal() +
+  labs(
+    title = "GO:0004371 - Glycerone Kinase Activity",
+    x = "Treatment Group",
+    y = "Log-CPM Expression"
+  ) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(hjust = 0.5),
+    strip.text = element_text(size = 10) # facet labels
+  )
+
+```
+
+
+
+
+
+
+### GO:0019367, GO:0034625, GO:0034626, GO:0042761 - FATTY ACID LONGATION AND BIOSYNTHESIS (single gene: LOC100749525)
+There is a single significant gene across these 4 similar go terms. So, considering them all here.
+```{r FAEBGenes, fig.height=3}
+FAEBGenes <- genes_byGO$GO0019367
+
+FAEBGenesCounts_lcpm <- counts_df %>%
+  filter(gene %in% FAEBGenes)
+
+#as.data.frame
+#as.data.frame(FBGeneCounts_lcpm)
+#colnames(FBGeneCounts_lcpm) <- FBGene[1]
+
+
+# Pivot longer so each row is gene × sample
+FAEBGenesCounts_lcpm_long <- FAEBGenesCounts_lcpm %>%
+  pivot_longer(-gene, names_to = "sample_id", values_to = "expression")
+
+# Join metadata
+FAEBGenesCounts_lcpm_long <- FAEBGenesCounts_lcpm_long %>%
+  left_join(sampleData, by = c("sample_id" = "sample_id"))
+
+FAEBGenesCounts_lcpm_long$tx_group <- factor(FAEBGenesCounts_lcpm_long$tx_group, levels= c("FLW", "FLQ", "MLW", "MLQ", "QLW", "QLQ"))
+
+
+#Make PLOT
+# Multipanel plot for all genes in this GO term
+ggplot(FAEBGenesCounts_lcpm_long, aes(x = tx_group, y = expression, fill = tx_group)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+  geom_jitter(width = 0.2, alpha = 0.5) +
+  facet_wrap(~gene, scales = "free_y") +  # one panel per gene
+  theme_minimal() +
+  labs(
+    title = "GO:0019367, GO:0034625, GO:0034626, GO:0042761 - fatty acid elongation and biosynthesis",
+    x = "Treatment Group",
+    y = "Log-CPM Expression"
+  ) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(hjust = 0.5),
+    strip.text = element_text(size = 10) # facet labels
+  )
+
+```
+
+
+
+
+
+
+
+
+### GO:0062129 - CHITIN-BASED EXTRACELLULAR MATRIX
+```{r CBEMGenes, fig.height=6}
+CBEMGenes <- genes_byGO$GO0062129
+
+CBEMGenesCounts_lcpm <- counts_df %>%
+  filter(gene %in% CBEMGenes)
+
+#as.data.frame
+#as.data.frame(FBGeneCounts_lcpm)
+#colnames(FBGeneCounts_lcpm) <- FBGene[1]
+
+
+# Pivot longer so each row is gene × sample
+CBEMGenesCounts_lcpm_long <- CBEMGenesCounts_lcpm %>%
+  pivot_longer(-gene, names_to = "sample_id", values_to = "expression")
+
+# Join metadata
+CBEMGenesCounts_lcpm_long <- CBEMGenesCounts_lcpm_long %>%
+  left_join(sampleData, by = c("sample_id" = "sample_id"))
+
+CBEMGenesCounts_lcpm_long$tx_group <- factor(CBEMGenesCounts_lcpm_long$tx_group, levels= c("FLW", "FLQ", "MLW", "MLQ", "QLW", "QLQ"))
+
+
+#Make PLOT
+# Multipanel plot for all genes in this GO term
+ggplot(CBEMGenesCounts_lcpm_long, aes(x = tx_group, y = expression, fill = tx_group)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+  geom_jitter(width = 0.2, alpha = 0.5) +
+  facet_wrap(~gene, scales = "free_y", ncol=2) +  # one panel per gene
+  theme_minimal() +
+  labs(
+    title = "GO:0062129 - chitin-based extracellular matrix
+",
+    x = "Treatment Group",
+    y = "Log-CPM Expression"
+  ) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(hjust = 0.5),
+    strip.text = element_text(size = 10) # facet labels
+  )
+
+```
+
+
+
+
+
+### GO:0015179 - L-AMINO ACID TRANSMEMBRANE TRANSPORTER ACTIVITY
+```{r LAATTAGenes, fig.height=6}
+LAATTAGenes <- genes_byGO$GO0015179
+
+LAATTAGenesCounts_lcpm <- counts_df %>%
+  filter(gene %in% LAATTAGenes)
+
+#as.data.frame
+#as.data.frame(FBGeneCounts_lcpm)
+#colnames(FBGeneCounts_lcpm) <- FBGene[1]
+
+
+# Pivot longer so each row is gene × sample
+LAATTAGenesCounts_lcpm_long <- LAATTAGenesCounts_lcpm %>%
+  pivot_longer(-gene, names_to = "sample_id", values_to = "expression")
+
+# Join metadata
+LAATTAGenesCounts_lcpm_long <- LAATTAGenesCounts_lcpm_long %>%
+  left_join(sampleData, by = c("sample_id" = "sample_id"))
+
+LAATTAGenesCounts_lcpm_long$tx_group <- factor(LAATTAGenesCounts_lcpm_long$tx_group, levels= c("FLW", "FLQ", "MLW", "MLQ", "QLW", "QLQ"))
+
+
+#Make PLOT
+# Multipanel plot for all genes in this GO term
+ggplot(LAATTAGenesCounts_lcpm_long, aes(x = tx_group, y = expression, fill = tx_group)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+  geom_jitter(width = 0.2, alpha = 0.5) +
+  facet_wrap(~gene, scales = "free_y", ncol=2) +  # one panel per gene
+  theme_minimal() +
+  labs(
+    title = "GO:0015179 - L-amino acid transmembrane transporter activity",
+    x = "Treatment Group",
+    y = "Log-CPM Expression"
+  ) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(hjust = 0.5),
+    strip.text = element_text(size = 10) # facet labels
+  )
+
+```
+
+
+
+### GO:0005576 - EXTRACELLULAR REGION (cc)
+```{r ECRGenes, fig.height=6}
+ECRGenes <- genes_byGO$GO0005576
+
+ECRGenesCounts_lcpm <- counts_df %>%
+  filter(gene %in% ECRGenes)
+
+#as.data.frame
+#as.data.frame(FBGeneCounts_lcpm)
+#colnames(FBGeneCounts_lcpm) <- FBGene[1]
+
+
+# Pivot longer so each row is gene × sample
+ECRGenesCounts_lcpm_long <- ECRGenesCounts_lcpm %>%
+  pivot_longer(-gene, names_to = "sample_id", values_to = "expression")
+
+# Join metadata
+ECRGenesCounts_lcpm_long <- ECRGenesCounts_lcpm_long %>%
+  left_join(sampleData, by = c("sample_id" = "sample_id"))
+
+ECRGenesCounts_lcpm_long$tx_group <- factor(ECRGenesCounts_lcpm_long$tx_group, levels= c("FLW", "FLQ", "MLW", "MLQ", "QLW", "QLQ"))
+
+
+#Make PLOT
+# Multipanel plot for all genes in this GO term
+ggplot(ECRGenesCounts_lcpm_long, aes(x = tx_group, y = expression, fill = tx_group)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+  geom_jitter(width = 0.2, alpha = 0.5) +
+  facet_wrap(~gene, scales = "free_y", ncol=2) +  # one panel per gene
+  theme_minimal() +
+  labs(
+    title = "GO:0005576 - extracellular region",
+    x = "Treatment Group",
+    y = "Log-CPM Expression"
+  ) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(hjust = 0.5),
+    strip.text = element_text(size = 10) # facet labels
+  )
+
+```
+
+
+
+
+
+
+
+
+
+# Trying to locate the GO assigned to Gene LOC105680522 and LOC117151569
+
+## Looking for Gene ID: LOC105680522
+Gene LOC105680522 is the last of the 6 DEGs across all across caste TX groups. I can't determine its GO assignment using the sig go terms, so I am trying to ID across all GOs. Reworking here as not to interfere with analysis. 
+```{r findingLOC105680522}
+
+LOC105680522 <- "LOC105680522"
+
+FLWFLQ_GOs <- c(DEG_GOallontology.FLWFLQ.UPregulated$GO.ID, DEG_GOallontology.FLWFLQ.DOWNregulated$GO.ID)
+
+ID_LOC105680522 <- unique(FLWFLQ_GOs)
+
+
+#GOs_FLWFLQ <- genesInTerm(object = DEgenes.FLWFLQ.GO.bp, whichGO = ID_LOC105680522)
+#GOforLOC105680522 <- LOC105680522[LOC105680522 %in% unlist(GOs_FLWFLQ)]
+#GOforLOC105680522
+# Combine your GO objects into a named list
+GOobjects <- list(
+  BP.up = DEgenes.FLWFLQ_UP.GO.bp,
+  MF.up = DEgenes.FLWFLQ_UP.GO.mf,
+  CC.up = DEgenes.FLWFLQ_UP.GO.cc,
+  BP.down = DEgenes.FLWFLQ_DOWN.GO.bp,
+  MF.down = DEgenes.FLWFLQ_DOWN.GO.mf,
+  CC.down = DEgenes.FLWFLQ_DOWN.GO.cc
+)
+
+
+
+
+# function: find all GO terms across BP, MF, CC
+find_gene_in_all_GO <- function(gene, GOlist) {
+  result <- list()
+  
+  for (ont in names(GOlist)) {
+    go_terms <- GOlist[[ont]]
+    
+    # ensure the inner structure is a list (each GO term = vector of genes)
+    if (!is.list(go_terms)) next
+    
+    # find which GO terms contain the gene
+    matched_terms <- names(Filter(function(gvec) gene %in% gvec, go_terms))
+    
+    result[[ont]] <- matched_terms
+  }
+  
+  result
+}
+
+
+GOmatches_LOC105680522 <- find_gene_in_all_GO(
+  LOC105680522,
+  significant_genes_per_GO.FLWFLQ
+)
+
+GOmatches_LOC105680522
+
+
+
+```
+
+Okay, we aren't finding the Gene among our go terms. There are a few possibilities: 1) the function doesn't work, 2) the gene isn't in the gene universe, 3) the gene is among the NAs removed, and 4) the gene hasn't been annotated. I will assess these in that order.
+
+### 1) Test gene locating function
+Testing the function with a gene we know is there!
+```{r testingfun}
+
+gene_known <- "LOC100742982"
+
+GOmatches_LOC100742982 <- find_gene_in_all_GO(
+  gene_known,
+  significant_genes_per_GO.FLWFLQ
+)
+
+GOmatches_LOC100742982
+
+```
+
+
+### 2) See if the gene is in the universe
+Checking to make sure it is in the gene universe.
+```{r geneuniversecheck}
+
+LOC105680522 %in% geneUniverse
+
+```
+
+The gene is present in the gene universe.
+
+### 3) Was the gene removed as an outlier pre-Fisher test
+Checking to make sure it is not one of the NAs removed.
+```{r outliercheck}
+
+LOC105680522 %in% FLWFLQ_napos
+
+```
+
+It is not a gene that was removed as an outlier.
+
+
+### 4) Has the gene been annotated
+Checking to make sure the gene has been annotated (i.e., is in your gene2Mapping annotation file).
+```{r annotationcheck}
+
+LOC105680522 %in% gene2mapping
+
+```
+
+The gene is not in the mapping file. Therefore, I am concluding that **LOC105680522** hasn't been annotated.
+
+
+
+## Looking for Gene ID: LOC117151569
+Gene LOC117151569 is the last of the 6 DEGs across all across caste TX groups. I can't determine its GO assignment using the sig go terms, so I am trying to ID across all GOs. Reworking here as not to interfere with analysis. 
+```{r findingLOC117151569}
+
+LOC117151569 <- "LOC117151569"
+
+FLWFLQ_GOs <- c(DEG_GOallontology.FLWFLQ.UPregulated$GO.ID, DEG_GOallontology.FLWFLQ.DOWNregulated$GO.ID)
+
+ID_LOC117151569 <- unique(FLWFLQ_GOs)
+
+
+#GOobject and function already made when testing the prior gene
+
+
+
+
+GOmatches_LOC117151569 <- find_gene_in_all_GO(
+  LOC117151569,
+  significant_genes_per_GO.FLWFLQ
+)
+
+GOmatches_LOC117151569
+
+
+
+```
+
+
+
+
+
+
+Okay, we aren't finding the Gene among our go terms. There are a few possibilities: 1) the function doesn't work, 2) the gene isn't in the gene universe, 3) the gene is among the NAs removed, and 4) the gene hasn't been annotated. I will assess these in that order.
+
+### 1) Test gene locating function
+The same function as before, so we know it works.
+
+
+### 2) See if the gene is in the universe
+Checking to make sure it is in the gene universe.
+```{r geneuniversecheck_LOC117151569}
+
+LOC117151569 %in% geneUniverse
+
+```
+
+The gene is present in the gene universe.
+
+### 3) Was the gene removed as an outlier pre-Fisher test
+Checking to make sure it is not one of the NAs removed.
+```{r outliercheck_LOC117151569}
+
+LOC117151569 %in% FLWFLQ_napos
+
+```
+
+It is not a gene that was removed as an outlier.
+
+
+### 4) Has the gene been annotated
+Checking to make sure the gene has been annotated (i.e., is in your gene2Mapping annotation file).
+```{r annotationcheck_LOC117151569}
+
+LOC117151569 %in% gene2mapping
+
+```
+
+The gene is not in the mapping file. Therefore, I am concluding that **LOC117151569** hasn't been annotated.
+
+
+
+
+
+
+

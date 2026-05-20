@@ -1,0 +1,1985 @@
+---
+title: "B. impatiens Maternal Brain Differential Gene Expression Analysis"
+author: "M.A. Hagadorn"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	warning = TRUE,
+	highlight = TRUE,
+	tidy.opts = list(width.cutoff = 80), tidy = TRUE)
+```
+
+
+```{r loadpackages, warning=FALSE, echo=FALSE, message=FALSE, include=FALSE}
+#Library Necessary Packages
+library(DESeq2) 
+library(ggplot2)
+library(scales) # needed for oob parameter
+library(viridis) #color scale on MA plot
+library(gridExtra)
+library(gtable)
+library(grid)
+library(knitr)
+library(reshape2)
+library(cowplot)
+library(ggdendro)
+library(kableExtra)
+library(writexl)
+
+options(stringsAsFactors = FALSE)
+```
+
+
+```{r packageinfo}
+installed.packages()[names(sessionInfo()$otherPkgs), "Version"]
+```
+
+I used the following tutorials while preparing my data and working through the process:
+https://genviz.org/module-04-expression/0004/02/01/DifferentialExpression/
+https://www.bioconductor.org/packages/release/bioc/vignettes/DESeq2/inst/doc/DESeq2.html
+
+#Load Data
+An initial filtering step occurred prior to this analysis. This included removing 3,332 genes using the **filterByExpr()** function in the edgeR. The remaining expression data included 9,593 genes. Two samples were also clear outliers when examing the PCA plots of the filtered gene data. These two samples were removed. Thus, the subsequent DEG input is countdata for 9,593 genes across 34 samples. Note: the inputs for DEG and WGCNA are identical.
+```{r loadcountdata}
+#load in the same count matrix used for WGCNA
+rawCounts0 <- read.csv2("../../../RNASeqAnalysis/BimpMB_RNAanalysis/Filtering/GECountData_GenesOutliers_Filtered.csv", sep=";")
+head(rawCounts0)
+dim(rawCounts0)
+
+
+#Read in with samples as column names and gene as column 1
+
+
+
+#load in the sample mappings
+sampleData0 <- read.delim("../../../RNASeqAnalysis/BimpMB_RNAanalysis/Filtering/sampleData_OutliersRemoved.csv", sep=";")
+head(sampleData0)
+
+# Also save a copy for later
+#sampleData <- sampleData0
+```
+
+
+
+# Format Data
+Now we need to get the data in the right format for conducting the analyses. \ 
+
+To do so, we need to store readcounts and intermediate calculations needed for the expression analysis in an object of class **DESeqDataSet**, which is specific to DEseq2. This object also stores the dispersion and log2 fold changes. Analysis Formula: "~" followed by "+" separating factors. The factor of interest should be listed last and the control group within those factors should be listed first when viewing levels of the variable.\ 
+ 
+Notes from tutorial:\ 
+"When specifying the formula it should take the form of a “~” followed by “+” separating factors. When using the default DEseq2 parameters the factor of interest (tissue type in this case) should be specified last and the control within that factor should be first when viewing the levels() for that variable."
+
+## Convert count data to matrix of DEseq2 appropriate format
+Make rows genes and columns samples.
+```{r counttomat}
+# Convert count data to a matrix of appropriate form that DEseq2 can read
+colnames(rawCounts0)[1] <- c("GeneID")
+geneID <- rawCounts0$GeneID
+
+
+#colnames(rawCounts) == Gene.ID --> Gene.Name --> and samples as columns
+
+##THE FORMAT DESEQ2 WANTS IS ROWS = GENES & COLUMNS = SAMPLES
+sampleIndex <- grepl("K\\d+", colnames(rawCounts0)) #ID samples as those starting with a K
+
+#makes a new matrix that subset the original for only samples (i.e., not the gene id or name)
+rawCounts <- as.matrix(rawCounts0[,sampleIndex])
+rawCounts <- apply(rawCounts, 2, as.numeric)
+
+#rawCounts <- as.numeric(rawCounts)
+dim(rawCounts)
+head(rawCounts)
+
+#save the GeneID as the row names
+rownames(rawCounts) <- geneID
+head(rawCounts)
+```
+
+
+## Convert Sample Variables to DEseq2 appropriate format
+Make rows samples and columns specific variables, keeping only the ones we want to analyze. Assign as factors
+```{r samplemapping}
+# Convert sample variable mappings to an appropriate form that DESeq2 can read
+#head(sampleData0)
+print(sampleData0[1:5, 1:7])
+
+#make new df to work with moving forward
+sampleData <- sampleData0
+#Assigning the sample names as rownames
+rownames(sampleData) <- sampleData$sample_id
+
+#columns/variables to keep--column name
+keeperCols <- c("tx_group", "tx_category", "colony", "caste")
+
+#####Update the TX_category name to include no dashes
+# Use replace() to replace the names in the 'Names' column
+sampleData$tx_category <- replace(sampleData$tx_category, sampleData$tx_category %in% "foundress-like", "foundresslike")
+sampleData$tx_category <- replace(sampleData$tx_category, sampleData$tx_category %in% "maternal-like", "maternallike")
+sampleData$tx_category <- replace(sampleData$tx_category, sampleData$tx_category %in% "queen-like", "queenlike")
+
+
+#subset sample data (sample names as row names) by the variables of interest
+sampleData <- sampleData[, keeperCols]
+sampleData$tx_group <- factor(sampleData$tx_group)
+sampleData$tx_category <- factor(sampleData$tx_category)
+sampleData$colony <- factor(sampleData$colony)
+sampleData$caste <- factor(sampleData$caste)
+head(sampleData)
+
+```
+
+
+
+## Sort Order: make sure the columns of count data are in the same order as the rows of sample mapping
+From the tutorial:\ 
+"For DEseq2 to work properly the column names of the count matrix must be in the same order as the row names of the sample mapping data, to ensure this we re-order the column names of the count data and run a check to ensure this has occurred correctly."\ 
+
+Followed by:\ 
+"To take advantage of the default settings of DEseq2 the control of the variable of interest, in our case the tissue type, should be the first element in the levels of that variable. Because we have more than 2 conditions for this variable we will not be taking advantage of the default settings however it’s good to get into the practice of doing this so we do it here."
+```{r ordermatching}
+# Put the columns of the count data in the same order as rows names of the sample mapping, then make sure it worked
+rawCounts <- rawCounts[,unique(rownames(sampleData))] 
+all(colnames(rawCounts) == rownames(sampleData))
+
+# Order the tx groups so that it is sensible and make sure the control sample is first: FL -> ML -> QL
+sampleData$tx_group <- factor(sampleData$tx_group, levels=c("FLW", "FLQ", "MLW", "MLQ", "QLW", "QLQ"))
+sampleData$tx_category <- factor(sampleData$tx_category, levels=c("foundresslike", "maternallike", "queenlike"))
+
+
+# Create the DEseq2DataSet object
+  #NOTE ADDING THE TRUNC() BECAUSE WONT ACCEPT DECIMALS
+deseq2Data <- DESeqDataSetFromMatrix(countData=trunc(rawCounts), colData=sampleData, design= ~ tx_group)
+#deseq2Data_m2 <- DESeqDataSetFromMatrix(countData=trunc(rawCounts), colData=sampleData, design= ~ caste + tx_category)
+```
+
+
+## Assess filter criteria
+The first line of code should return zero genes (rows), i.e., no genes are unexpressed in any sample. The second should return all genes and samples. This is because we have already filtered the genes using edgeR and removed outliers via PCA results. I am just using this step to verify.
+```{r preprocessing-1}
+#From Karens approach just modified for this format
+dim(deseq2Data[rowSums(counts(deseq2Data)) == 0,]) # How many genes are unexpressed in any samples?
+#counts(deseq2Data) give the counts for each gene by sample
+#rowSums(counts(deseq2Data)) == 0; a read out of the false true status for rowSums == 0
+#table(rowSums(counts(deseq2Data)) == 0); give FALSE vs TRUE numbers
+
+#greater than 10
+dim(deseq2Data[rowSums(counts(deseq2Data)) > 10, ])
+
+```
+
+
+
+
+# Run DESeq--MODEL: Counts ~ tx_group w/ levels=c("FLW", "FLQ", "MLW", "MLQ", "QLW", "QLQ")
+```{r runDEseq}
+deseq2Data <- DESeq(deseq2Data)
+
+#####Make to use with heatmap#####
+# Transform count data using the variance stablilizing transform
+#vst() = variance stablizing transformation--provides a faster estimation of dispersion
+deseq2VST <- vst(deseq2Data)
+
+# Convert the DESeq transformed object to a data frame
+deseq2VST <- assay(deseq2VST)
+deseq2VST <- as.data.frame(deseq2VST)
+deseq2VST$Gene <- rownames(deseq2VST)
+dim(deseq2VST)
+print(deseq2VST[1:5,1:6])
+
+
+# Save for use in subsequent parts
+save(deseq2Data, deseq2VST, sampleData, file = "DEG_data") 
+
+
+#assign LFC and pthreshold
+LFC <- 1.5
+adjP <- 0.05
+```
+
+## Across Castes
+
+### FLW V FLQ
+
+```{r extractDEseq_FLWFLQ}
+# Extract differential expression results
+# For "tx_group" perform primary vs normal comparison
+res_FLWFLQ <- results(deseq2Data, contrast=c("tx_group", "FLW", "FLQ"), independentFiltering=FALSE, pAdjustMethod = "BH")
+
+# View summary of results
+summary(res_FLWFLQ, alpha=0.05)
+summary(res_FLWFLQ, alpha=0.10)
+summary(res_FLWFLQ, alpha=0.01)
+```
+
+MA plots: display the log ratio (M) vs an average (A) in order to visualize the differences between two groups. \ 
+
+Expectations of an MA plot = gene expression to remain consistent between conditions (NULL), so the MA plot should be similar to the shape of the trumpet.
+```{r MA_FLWFLQ, warning=FALSE, fig.height=5}
+# Using DEseq2 built in method
+plotMA(res_FLWFLQ, alpha=0.05)
+```
+
+
+```{r ggplotsMA_FLWFLQ, warning=FALSE}
+# Coerce to a data frame
+res_FLWFLQ <- as.data.frame(res_FLWFLQ)
+
+# Examine this data frame
+head(res_FLWFLQ)
+
+# Set a boolean column for significance
+res_FLWFLQ$significant <- ifelse(res_FLWFLQ$padj < adjP, "Significant", NA)
+
+# Let's add some more detail
+ggplot(res_FLWFLQ, aes(baseMean, log2FoldChange, colour=padj)) +
+geom_point(size=1) +
+scale_y_continuous(limits=c(-3, 3), oob=squish) + 
+scale_x_log10() + 
+geom_hline(yintercept = 0, colour="darkorchid4", size=1, linetype="longdash") +
+labs(x="mean of normalized counts", y="log fold change") + 
+scale_colour_viridis(direction=-1, trans='sqrt') + 
+theme_bw() + 
+  geom_density_2d(colour="black", size=1)
+```
+
+#### Remove outliers and Subset by TX
+
+```{r outliers_FLWFLQ}
+#VERIFY COUNT
+#Assess number of genes with adjustedp=NA; N=14
+count(is.na(res_FLWFLQ$padj))
+
+#VERIFY SAME POSITIONS ACROSS ALL PAIRWISE
+FLWFLQ_napos <- which(is.na(res_FLWFLQ$padj), arr.ind = TRUE)
+
+
+#Create a new data frame to use going forward W/O those padj NAs
+deseq2ResDF_FLWFLQ.noNA <- res_FLWFLQ[-FLWFLQ_napos,]
+
+
+# Keep only the significantly differentiated genes where the fold-change was at least at threshold
+sigGenes_FLWFLQ <- rownames(deseq2ResDF_FLWFLQ.noNA[deseq2ResDF_FLWFLQ.noNA$padj <= adjP & 
+            abs(deseq2ResDF_FLWFLQ.noNA$log2FoldChange) > LFC,])
+
+length(sigGenes_FLWFLQ)
+
+deseq2VST_FLWFLQ <- deseq2VST[deseq2VST$Gene %in% sigGenes_FLWFLQ,]
+
+
+# First compare wide vs long version
+deseq2VST_FLWFLQ_wide <- deseq2VST_FLWFLQ
+deseq2VST_FLWFLQ_long <- melt(deseq2VST_FLWFLQ, id.vars=c("Gene")) #needed for ggplot
+
+print(deseq2VST_FLWFLQ_wide[1:5,1:7])
+head(deseq2VST_FLWFLQ_long)
+
+
+###ONLY FLW AND FLQ SAMPLES
+FLWFLQ_samplessubset <- rownames(sampleData[which(sampleData$tx_group=="FLW" | sampleData$tx_group=="FLQ"),])
+#make empty dataframe for saving in the for loop
+deseq2VST_long_FLWFLQsubset <- data.frame()
+
+for (id in FLWFLQ_samplessubset) {
+  subset_id <- deseq2VST_FLWFLQ_long[deseq2VST_FLWFLQ_long$variable == id, ]  # Subset df by the current value of id
+  # at to the the subset dataframe each iteration
+  deseq2VST_long_FLWFLQsubset <- rbind(deseq2VST_long_FLWFLQsubset, subset_id)
+}
+
+#verifying status of data frame
+# Check if all ids in the variable column of the subsetted list are from the allowed id per the TX group used for the pairwise
+
+
+# Output the result
+invalid_names <- deseq2VST_long_FLWFLQsubset$variable[!deseq2VST_long_FLWFLQsubset$variable %in% FLWFLQ_samplessubset]
+if (length(invalid_names) > 0) {
+  print(paste("Invalid IDs in the DF:", paste(invalid_names, collapse = ", ")))
+} else {
+  print("All IDs in the DF are valid.")
+}
+
+```
+
+```{r makeheatmap_FLWFLQ, eval=FALSE}
+# Make a heatmap
+ggplot(deseq2VST_long_FLWFLQsubset, aes(x=variable, y=Gene, fill=value)) + 
+  geom_raster() + 
+  scale_fill_viridis(trans="sqrt") + 
+  theme(axis.text.x=element_text(angle=65, hjust=1), 
+        axis.text.y=element_blank(), 
+        axis.ticks.y=element_blank())
+```
+
+```{r clusteredheatmap_FLWFLQ, fig.height=10}
+# Convert the significant genes back to a matrix for clustering
+deseq2VSTMatrix_FLWFLQ <- dcast(deseq2VST_long_FLWFLQsubset, Gene ~ variable)
+rownames(deseq2VSTMatrix_FLWFLQ) <- deseq2VSTMatrix_FLWFLQ$Gene
+deseq2VSTMatrix_FLWFLQ$Gene <- NULL
+
+# Compute a distance calculation on both dimensions of the matrix
+#dist() computes the distance based on the rows of the df
+#in the current format, gives distance based on genes
+distanceGene_FLWFLQ <- dist(deseq2VSTMatrix_FLWFLQ)
+#transpose to get distance based on samples
+distanceSample_FLWFLQ <- dist(t(deseq2VSTMatrix_FLWFLQ))
+
+# Cluster based on the distance calculations
+#hclust: hierarchical cluster
+clusterGene_FLWFLQ <- hclust(distanceGene_FLWFLQ, method="average")
+clusterSample_FLWFLQ <- hclust(distanceSample_FLWFLQ, method="average")
+
+#get specific colors by TX group:
+clustorder_FLWFLQ <- clusterSample_FLWFLQ$order
+color_vector_FLWFLQ <- vector("character", length(clustorder_FLWFLQ))
+# Loop through each name in clustorder_FLWFLQ
+for (i in 1:length(clustorder_FLWFLQ)) {
+  name <- clustorder_FLWFLQ[i]
+ 
+  # Check if the name exists in rownames of sampleData and if the tx_group is "FLW"
+  if (name >= 6) {  #6 not 7 because this FLQ have one less sample
+    color_vector_FLWFLQ[i] <- "blue"  # Assign blue if location is 6 or above
+  } else {
+    color_vector_FLWFLQ[i] <- "goldenrod"   # Assign blue if the name does not match "FLW"
+  }
+}
+
+
+color_vector_FLWFLQ_xcol <- c("goldenrod","goldenrod","goldenrod","goldenrod","goldenrod","blue","blue","blue","blue","blue","blue")
+
+color_vector_FLWFLQ == color_vector_FLWFLQ_xcol
+
+
+# Construct a dendogram for samples
+sampleModel_FLWFLQ <- as.dendrogram(clusterSample_FLWFLQ)
+sampleDendrogramData_FLWFLQ <- segment(dendro_data(sampleModel_FLWFLQ, type = "rectangle"))
+sampleDendrogram_FLWFLQ <- ggplot(sampleDendrogramData_FLWFLQ) + 
+  geom_segment(aes(x = x, y = y, xend = xend, yend = yend)) +
+  theme_dendro()
+
+# Re-factor samples for ggplot2
+#use to match dendogram
+deseq2VST_long_FLWFLQsubset$variable <- factor(deseq2VST_long_FLWFLQsubset$variable,levels=clusterSample_FLWFLQ$labels[clusterSample_FLWFLQ$order])
+
+# Construct the heatmap. note that at this point we have only clustered the samples NOT the genes
+heatmap_FLWFLQ <- ggplot(deseq2VST_long_FLWFLQsubset, aes(x=variable, y=Gene, fill=value)) + 
+  geom_raster() + 
+  scale_fill_viridis(trans="sqrt") +
+  theme(axis.text.x=element_text(angle=65, hjust=1, color = color_vector_FLWFLQ_xcol),
+        #axis.text.y=element_blank(), 
+        axis.ticks.y=element_blank(),
+        plot.margin = unit(c(-.75, 0, 0, 0), "cm"))
+
+# Combine the dendrogram and the heatmap
+#install.packages("gridExtra")
+
+title <- ggdraw() + draw_label("Significant Genes for FL workers (blue) v FL queens (gold)", fontface='bold')
+plot_grid(title, NULL, sampleDendrogram_FLWFLQ, NULL, heatmap_FLWFLQ, NULL, align= "v", ncol=2, nrow=3, rel_heights = c(.05,.1,1,1,1,1), rel_widths = c(2.7,.1,2.7,.1,2.5,.1))
+```
+
+
+```{r regdirection_FLWFLQ}
+DEGs_FLWFLQ <- deseq2ResDF_FLWFLQ.noNA[rownames(deseq2ResDF_FLWFLQ.noNA) %in% sigGenes_FLWFLQ,]
+
+#write the DEGs and data to CSV
+write.csv(DEGs_FLWFLQ,"SigGeneLists/DEGs_FLWFLQ.csv", row.names = TRUE)
+DEG_genelist_FLWFLQ <- rownames(DEGs_FLWFLQ)
+#write gene list to txt
+write.table(DEG_genelist_FLWFLQ,"SigGeneLists/DEG_genelist_FLWFLQ.txt", row.names = FALSE, col.names = FALSE, quote=FALSE)
+
+
+DEGs.FCdir_FLWFLQ <- DEGs_FLWFLQ[,c("log2FoldChange", "padj")]
+length(DEGs.FCdir_FLWFLQ$log2FoldChange)
+
+
+#print in document
+DEGs.FCdir_FLWFLQ 
+
+
+###Write All Results to document
+
+write.csv(res_FLWFLQ,"DEGFullResults/DEGananalysisResults_FLWFLQ.csv", row.names = TRUE)
+
+```
+
+
+### MLW V MLQ
+
+From here on out, I will *echo=FALSE* for the parts of the code that generate the heat map. I am doing so to save space and making the document easier to follow.
+
+```{r extractDEseq_MLWMLQ}
+# Extract differential expression results
+# For "tx_group" perform primary vs normal comparison
+res_MLWMLQ <- results(deseq2Data, contrast=c("tx_group", "MLW", "MLQ"), independentFiltering=FALSE, pAdjustMethod = "BH")
+
+# View summary of results
+summary(res_MLWMLQ, alpha=0.05)
+summary(res_MLWMLQ, alpha=0.10)
+summary(res_MLWMLQ, alpha=0.01)
+```
+
+```{r MA_MLWMLQ, warning=FALSE, fig.height=5, echo=FALSE}
+# Using DEseq2 built in method
+plotMA(res_MLWMLQ, alpha=0.05)
+```
+
+
+```{r ggplotsMA_MLWMLQ, warning=FALSE}
+# Coerce to a data frame
+res_MLWMLQ <- as.data.frame(res_MLWMLQ)
+
+# Examine this data frame
+head(res_MLWMLQ)
+
+# Set a boolean column for significance
+res_MLWMLQ$significant <- ifelse(res_MLWMLQ$padj < adjP, "Significant", NA)
+
+# Let's add some more detail
+ggplot(res_MLWMLQ, aes(baseMean, log2FoldChange, colour=padj)) +
+geom_point(size=1) +
+scale_y_continuous(limits=c(-3, 3), oob=squish) +
+scale_x_log10() +
+geom_hline(yintercept = 0, colour="darkorchid4", size=1, linetype="longdash") +
+labs(x="mean of normalized counts", y="log fold change") +
+scale_colour_viridis(direction=-1, trans='sqrt') +
+theme_bw() +
+  geom_density_2d(colour="black", size=1)
+```
+
+
+#### Remove outliers and Subset by TX
+
+```{r outliers_MLWMLQ}
+#VERIFY COUNT
+#Assess number of genes with adjustedp=NA; N=14
+count(is.na(res_MLWMLQ$padj))
+
+#VERIFY SAME POSITIONS ACROSS ALL PAIRWISE
+MLWMLQ_napos <- which(is.na(res_MLWMLQ$padj), arr.ind = TRUE)
+
+
+#Create a new data frame to use going forward W/O those padj NAs
+deseq2ResDF_MLWMLQ.noNA <- res_MLWMLQ[-MLWMLQ_napos,]
+
+
+# Keep only the significantly differentiated genes where the fold-change was at least 3
+sigGenes_MLWMLQ <- rownames(deseq2ResDF_MLWMLQ.noNA[deseq2ResDF_MLWMLQ.noNA$padj <= adjP &
+            abs(deseq2ResDF_MLWMLQ.noNA$log2FoldChange) > LFC,])
+
+length(sigGenes_MLWMLQ)
+
+deseq2VST_MLWMLQ <- deseq2VST[deseq2VST$Gene %in% sigGenes_MLWMLQ,]
+
+
+# First compare wide vs long version
+deseq2VST_MLWMLQ_wide <- deseq2VST_MLWMLQ
+deseq2VST_MLWMLQ_long <- melt(deseq2VST_MLWMLQ, id.vars=c("Gene")) #needed for ggplot
+
+print(deseq2VST_MLWMLQ_wide[1:5,1:7])
+head(deseq2VST_MLWMLQ_long)
+
+
+###ONLY MLW AND FLQ SAMPLES
+MLWMLQ_samplessubset <- rownames(sampleData[which(sampleData$tx_group=="MLW" | sampleData$tx_group=="MLQ"),])
+#make empty dataframe for saving in the for loop
+deseq2VST_long_MLWMLQsubset <- data.frame()
+
+for (id in MLWMLQ_samplessubset) {
+  subset_id <- deseq2VST_MLWMLQ_long[deseq2VST_MLWMLQ_long$variable == id, ]  # Subset df by the current value of id
+  # at to the the subset dataframe each iteration
+  deseq2VST_long_MLWMLQsubset <- rbind(deseq2VST_long_MLWMLQsubset, subset_id)
+}
+
+#verifying status of data frame
+# Check if all ids in the variable column of the subsetted list are from the allowed id per the TX group used for the pairwise
+
+
+# Output the result
+invalid_names <- deseq2VST_long_MLWMLQsubset$variable[!deseq2VST_long_MLWMLQsubset$variable %in% MLWMLQ_samplessubset]
+if (length(invalid_names) > 0) {
+  print(paste("Invalid IDs in the DF:", paste(invalid_names, collapse = ", ")))
+} else {
+  print("All IDs in the DF are valid.")
+}
+
+```
+
+```{r makeheatmap_MLWMLQ, eval=FALSE, echo=FALSE}
+# Make a heatmap
+ggplot(deseq2VST_long_MLWMLQsubset, aes(x=variable, y=Gene, fill=value)) +
+  geom_raster() +
+  scale_fill_viridis(trans="sqrt") +
+  theme(axis.text.x=element_text(angle=65, hjust=1),
+        axis.text.y=element_blank(),
+        axis.ticks.y=element_blank())
+```
+
+```{r clusteredheatmap_MLWMLQ, echo=FALSE, fig.height=5.5}
+# Convert the significant genes back to a matrix for clustering
+deseq2VSTMatrix_MLWMLQ <- dcast(deseq2VST_long_MLWMLQsubset, Gene ~ variable)
+rownames(deseq2VSTMatrix_MLWMLQ) <- deseq2VSTMatrix_MLWMLQ$Gene
+deseq2VSTMatrix_MLWMLQ$Gene <- NULL
+
+# Compute a distance calculation on both dimensions of the matrix
+#dist() computes the distance based on the rows of the df
+#in the current format, gives distance based on genes
+distanceGene_MLWMLQ <- dist(deseq2VSTMatrix_MLWMLQ)
+#transpose to get distance based on samples
+distanceSample_MLWMLQ <- dist(t(deseq2VSTMatrix_MLWMLQ))
+
+# Cluster based on the distance calculations
+#hclust: hierarchical cluster
+clusterGene_MLWMLQ <- hclust(distanceGene_MLWMLQ, method="average")
+clusterSample_MLWMLQ <- hclust(distanceSample_MLWMLQ, method="average")
+
+#get specific colors by TX group:
+clustorder_MLWMLQ <- clusterSample_MLWMLQ$order
+color_vector_MLWMLQ <- vector("character", length(clustorder_MLWMLQ))
+# Loop through each name in clustorder_MLWMLQ
+for (i in 1:length(clustorder_MLWMLQ)) {
+  name <- clustorder_MLWMLQ[i]
+
+  # Check if the name exists in rownames of sampleData and if the tx_group is "FLW"
+  if (name >= 7) {
+    color_vector_MLWMLQ[i] <- "blue"  # Assign green if the name matches "FLW" in tx_group
+  } else {
+    color_vector_MLWMLQ[i] <- "goldenrod"   # Assign blue if the name does not match "FLW"
+  }
+}
+
+
+
+color_vector_MLWMLQ_xcol <- c("blue","goldenrod","goldenrod","goldenrod","goldenrod","goldenrod","goldenrod","blue","blue","blue","blue","blue")
+
+color_vector_MLWMLQ == color_vector_MLWMLQ_xcol
+
+
+# color_vector_FLWFLQ_xcol <- c("goldenrod","goldenrod","goldenrod","blue","blue","blue","blue","blue","blue","goldenrod","goldenrod","goldenrod")
+#
+# color_vector_FLWFLQ == color_vector_FLWFLQ_xcol
+
+
+# Construct a dendogram for samples
+sampleModel_MLWMLQ <- as.dendrogram(clusterSample_MLWMLQ)
+sampleDendrogramData_MLWMLQ <- segment(dendro_data(sampleModel_MLWMLQ, type = "rectangle"))
+sampleDendrogram_MLWMLQ <- ggplot(sampleDendrogramData_MLWMLQ) +
+  geom_segment(aes(x = x, y = y, xend = xend, yend = yend)) +
+  theme_dendro()
+
+# Re-factor samples for ggplot2
+#use to match dendogram
+deseq2VST_long_MLWMLQsubset$variable <- factor(deseq2VST_long_MLWMLQsubset$variable,levels=clusterSample_MLWMLQ$labels[clusterSample_MLWMLQ$order])
+
+# Construct the heatmap. note that at this point we have only clustered the samples NOT the genes
+heatmap_MLWMLQ <- ggplot(deseq2VST_long_MLWMLQsubset, aes(x=variable, y=Gene, fill=value)) +
+  geom_raster() +
+  scale_fill_viridis(trans="sqrt") +
+  theme(axis.text.x=element_text(angle=65, hjust=1, color = color_vector_MLWMLQ_xcol),
+        #axis.text.y=element_blank(),
+        axis.ticks.y=element_blank(),
+        plot.margin = unit(c(-.75, 0, 0, 0), "cm"))
+
+
+titleMLWMLQ <- ggdraw() + draw_label("Significant Genes for ML workers (blue) v ML queens (gold)", fontface='bold')
+plot_grid(titleMLWMLQ, NULL, sampleDendrogram_MLWMLQ, NULL, heatmap_MLWMLQ, NULL, align= "v", ncol=2, nrow=3, rel_heights = c(.1,.3,1,1,1,1), rel_widths = c(2.7,.1,2.7,.1,2.5,.1))
+```
+
+```{r regdirection_MLWMLQ, echo=FALSE}
+DEGs_MLWMLQ <- deseq2ResDF_MLWMLQ.noNA[rownames(deseq2ResDF_MLWMLQ.noNA) %in% sigGenes_MLWMLQ,]
+
+#write the DEGs and data to CSV
+write.csv(DEGs_MLWMLQ,"SigGeneLists/DEGs_MLWMLQ.csv", row.names = TRUE)
+DEG_genelist_MLWMLQ <- rownames(DEGs_MLWMLQ)
+#write gene list to txt
+write.table(DEG_genelist_MLWMLQ,"SigGeneLists/DEG_genelist_MLWMLQ.txt", row.names = FALSE, col.names = FALSE, quote=FALSE)
+
+
+
+DEGs.FCdir_MLWMLQ <- DEGs_MLWMLQ[,c("log2FoldChange", "padj")]
+length(DEGs.FCdir_MLWMLQ$log2FoldChange)
+
+
+DEGs.FCdir_MLWMLQ
+
+
+write.csv(res_MLWMLQ,"DEGFullResults/DEGananalysisResults_MLWMLQ.csv", row.names = TRUE)
+
+
+```
+
+
+### QLW V QLQ
+
+```{r extractDEseq_QLWQLQ}
+# Extract differential expression results
+# For "tx_group" perform primary vs normal comparison
+res_QLWQLQ <- results(deseq2Data, contrast=c("tx_group", "QLW", "QLQ"), independentFiltering=FALSE, pAdjustMethod = "BH")
+
+# View summary of results
+summary(res_QLWQLQ, alpha=0.05)
+summary(res_QLWQLQ, alpha=0.10)
+summary(res_QLWQLQ, alpha=0.01)
+```
+
+
+```{r MA_QLWQLQ, warning=FALSE, fig.height=5}
+# Using DEseq2 built in method
+plotMA(res_QLWQLQ, alpha=0.05)
+```
+
+
+```{r ggplotsMA_QLWQLQ, warning=FALSE}
+# Coerce to a data frame
+res_QLWQLQ <- as.data.frame(res_QLWQLQ)
+
+# Examine this data frame
+head(res_QLWQLQ)
+
+# Set a boolean column for significance
+res_QLWQLQ$significant <- ifelse(res_QLWQLQ$padj < adjP, "Significant", NA)
+
+# Let's add some more detail
+ggplot(res_QLWQLQ, aes(baseMean, log2FoldChange, colour=padj)) +
+geom_point(size=1) +
+scale_y_continuous(limits=c(-3, 3), oob=squish) +
+scale_x_log10() +
+geom_hline(yintercept = 0, colour="darkorchid4", size=1, linetype="longdash") +
+labs(x="mean of normalized counts", y="log fold change") +
+scale_colour_viridis(direction=-1, trans='sqrt') +
+theme_bw() +
+  geom_density_2d(colour="black", size=1)
+```
+
+
+#### Remove outliers and Subset by TX
+
+```{r outliers_QLWQLQ}
+#VERIFY COUNT
+#Assess number of genes with adjustedp=NA; N=14
+count(is.na(res_QLWQLQ$padj))
+
+#VERIFY SAME POSITIONS ACROSS ALL PAIRWISE
+QLWQLQ_napos <- which(is.na(res_QLWQLQ$padj), arr.ind = TRUE)
+
+
+#Create a new data frame to use going forward W/O those padj NAs
+deseq2ResDF_QLWQLQ.noNA <- res_QLWQLQ[-QLWQLQ_napos,]
+
+
+# Keep only the significantly differentiated genes where the fold-change was at least 3
+sigGenes_QLWQLQ <- rownames(deseq2ResDF_QLWQLQ.noNA[deseq2ResDF_QLWQLQ.noNA$padj <= adjP &
+            abs(deseq2ResDF_QLWQLQ.noNA$log2FoldChange) > LFC,])
+
+length(sigGenes_QLWQLQ)
+
+deseq2VST_QLWQLQ <- deseq2VST[deseq2VST$Gene %in% sigGenes_QLWQLQ,]
+
+
+# First compare wide vs long version
+deseq2VST_QLWQLQ_wide <- deseq2VST_QLWQLQ
+deseq2VST_QLWQLQ_long <- melt(deseq2VST_QLWQLQ, id.vars=c("Gene")) #needed for ggplot
+
+print(deseq2VST_QLWQLQ_wide[1:3,1:7])
+head(deseq2VST_QLWQLQ_long)
+
+
+###ONLY QLW AND FLQ SAMPLES
+QLWQLQ_samplessubset <- rownames(sampleData[which(sampleData$tx_group=="QLW" | sampleData$tx_group=="QLQ"),])
+#make empty dataframe for saving in the for loop
+deseq2VST_long_QLWQLQsubset <- data.frame()
+
+for (id in QLWQLQ_samplessubset) {
+  subset_id <- deseq2VST_QLWQLQ_long[deseq2VST_QLWQLQ_long$variable == id, ]  # Subset df by the current value of id
+  # at to the the subset dataframe each iteration
+  deseq2VST_long_QLWQLQsubset <- rbind(deseq2VST_long_QLWQLQsubset, subset_id)
+}
+
+#verifying status of data frame
+# Check if all ids in the variable column of the subsetted list are from the allowed id per the TX group used for the pairwise
+
+
+# Output the result
+invalid_names <- deseq2VST_long_QLWQLQsubset$variable[!deseq2VST_long_QLWQLQsubset$variable %in% QLWQLQ_samplessubset]
+if (length(invalid_names) > 0) {
+  print(paste("Invalid IDs in the DF:", paste(invalid_names, collapse = ", ")))
+} else {
+  print("All IDs in the DF are valid.")
+}
+
+```
+
+```{r makeheatmap_QLWQLQ, eval=FALSE, echo=FALSE}
+# Make a heatmap
+ggplot(deseq2VST_long_QLWQLQsubset, aes(x=variable, y=Gene, fill=value)) +
+  geom_raster() +
+  scale_fill_viridis(trans="sqrt") +
+  theme(axis.text.x=element_text(angle=65, hjust=1),
+        axis.text.y=element_blank(),
+        axis.ticks.y=element_blank())
+```
+
+```{r clusteredheatmap_QLWQLQ, fig.height=5.5, echo=FALSE}
+# Convert the significant genes back to a matrix for clustering
+deseq2VSTMatrix_QLWQLQ <- dcast(deseq2VST_long_QLWQLQsubset, Gene ~ variable)
+rownames(deseq2VSTMatrix_QLWQLQ) <- deseq2VSTMatrix_QLWQLQ$Gene
+deseq2VSTMatrix_QLWQLQ$Gene <- NULL
+
+# Compute a distance calculation on both dimensions of the matrix
+#dist() computes the distance based on the rows of the df
+#in the current format, gives distance based on genes
+distanceGene_QLWQLQ <- dist(deseq2VSTMatrix_QLWQLQ)
+#transpose to get distance based on samples
+distanceSample_QLWQLQ <- dist(t(deseq2VSTMatrix_QLWQLQ))
+
+# Cluster based on the distance calculations
+#hclust: hierarchical cluster
+clusterGene_QLWQLQ <- hclust(distanceGene_QLWQLQ, method="average")
+clusterSample_QLWQLQ <- hclust(distanceSample_QLWQLQ, method="average")
+
+#get specific colors by TX group:
+clustorder_QLWQLQ <- clusterSample_QLWQLQ$order
+color_vector_QLWQLQ <- vector("character", length(clustorder_QLWQLQ))
+# Loop through each name in clustorder_QLWQLQ
+for (i in 1:length(clustorder_QLWQLQ)) {
+  name <- clustorder_QLWQLQ[i]
+
+  # Check if the name exists in rownames of sampleData and if the tx_group is "FLW"
+  if (name >= 6) {
+    color_vector_QLWQLQ[i] <- "blue"  # Assign green if the name matches "FLW" in tx_group
+  } else {
+    color_vector_QLWQLQ[i] <- "goldenrod"   # Assign blue if the name does not match "FLW"
+  }
+}
+
+
+
+color_vector_QLWQLQ_xcol <- c("goldenrod","goldenrod","goldenrod","goldenrod","goldenrod", "blue","blue","blue","blue","blue","blue")
+
+color_vector_QLWQLQ == color_vector_QLWQLQ_xcol
+
+
+
+# Construct a dendogram for samples
+sampleModel_QLWQLQ <- as.dendrogram(clusterSample_QLWQLQ)
+sampleDendrogramData_QLWQLQ <- segment(dendro_data(sampleModel_QLWQLQ, type = "rectangle"))
+sampleDendrogram_QLWQLQ <- ggplot(sampleDendrogramData_QLWQLQ) +
+  geom_segment(aes(x = x, y = y, xend = xend, yend = yend)) +
+  theme_dendro()
+
+# Re-factor samples for ggplot2
+#use to match dendogram
+deseq2VST_long_QLWQLQsubset$variable <- factor(deseq2VST_long_QLWQLQsubset$variable,levels=clusterSample_QLWQLQ$labels[clusterSample_QLWQLQ$order])
+
+# Construct the heatmap. note that at this point we have only clustered the samples NOT the genes
+heatmap_QLWQLQ <- ggplot(deseq2VST_long_QLWQLQsubset, aes(x=variable, y=Gene, fill=value)) +
+  geom_raster() +
+  scale_fill_viridis(trans="sqrt") +
+  theme(axis.text.x=element_text(angle=65, hjust=1, color = color_vector_QLWQLQ),
+        #axis.text.y=element_blank(),
+        axis.ticks.y=element_blank(),
+        plot.margin = unit(c(-.75, 0, 0, 0), "cm"))
+
+# Combine the dendrogram and the heatmap
+#install.packages("gridExtra")
+
+titleQLWQLQ <- ggdraw() + draw_label("Significant Genes for QL workers (blue) v QL queens (gold)", fontface='bold')
+plot_grid(titleQLWQLQ, NULL, sampleDendrogram_QLWQLQ, NULL, heatmap_QLWQLQ, NULL, align= "v", ncol=2, nrow=3, rel_heights = c(.1,.35,1,1,1,1), rel_widths = c(2.7,.1,2.7,.1,2.5,.1))
+```
+
+
+```{r regdirection_QLWQLQ, fig.height=7, echo=FALSE}
+DEGs_QLWQLQ <- deseq2ResDF_QLWQLQ.noNA[rownames(deseq2ResDF_QLWQLQ.noNA) %in% sigGenes_QLWQLQ,]
+
+#write the DEGs and data to CSV
+write.csv(DEGs_QLWQLQ,"SigGeneLists/DEGs_QLWQLQ.csv", row.names = TRUE)
+DEG_genelist_QLWQLQ <- rownames(DEGs_QLWQLQ)
+#write gene list to txt
+write.table(DEG_genelist_QLWQLQ,"SigGeneLists/DEG_genelist_QLWQLQ.txt", row.names = FALSE, col.names = FALSE, quote=FALSE)
+
+
+DEGs.FCdir_QLWQLQ <- DEGs_QLWQLQ[,c("log2FoldChange", "padj")]
+length(DEGs.FCdir_QLWQLQ$log2FoldChange)
+
+
+DEGs.FCdir_QLWQLQ
+
+
+#FOR GSEA
+write.csv(res_QLWQLQ,"DEGFullResults/DEGananalysisResults_QLWQLQ.csv", row.names = TRUE)
+
+```
+
+
+
+## Within caste--WORKERS
+### FLW V MLW
+
+```{r extractDEseq_FLWMLW}
+# Extract differential expression results
+# For "tx_group" perform primary vs normal comparison
+res_FLWMLW <- results(deseq2Data, contrast=c("tx_group", "FLW", "MLW"), independentFiltering=FALSE, pAdjustMethod = "BH")
+
+# View summary of results
+summary(res_FLWMLW, alpha=0.05)
+summary(res_FLWMLW, alpha=0.10)
+summary(res_FLWMLW, alpha=0.01)
+```
+
+
+```{r MA_FLWMLW, warning=FALSE}
+# Using DEseq2 built in method
+plotMA(res_FLWMLW, alpha=0.05)
+```
+
+
+```{r ggplotsMA_FLWMLW, warning=FALSE}
+# Coerce to a data frame
+res_FLWMLW <- as.data.frame(res_FLWMLW)
+
+# Examine this data frame
+head(res_FLWMLW)
+
+# Set a boolean column for significance
+res_FLWMLW$significant <- ifelse(res_FLWMLW$padj < adjP, "Significant", NA)
+
+# Let's add some more detail
+ggplot(res_FLWMLW, aes(baseMean, log2FoldChange, colour=padj)) +
+geom_point(size=1) +
+scale_y_continuous(limits=c(-3, 3), oob=squish) +
+scale_x_log10() +
+geom_hline(yintercept = 0, colour="darkorchid4", size=1, linetype="longdash") +
+labs(x="mean of normalized counts", y="log fold change") +
+scale_colour_viridis(direction=-1, trans='sqrt') +
+theme_bw() +
+  geom_density_2d(colour="black", size=1)
+```
+
+
+#### Remove outliers and Subset by TX
+
+```{r outliers_FLWMLW}
+#VERIFY COUNT
+#Assess number of genes with adjustedp=NA; N=14
+count(is.na(res_FLWMLW$padj))
+
+#VERIFY SAME POSITIONS ACROSS ALL PAIRWISE
+FLWMLW_napos <- which(is.na(res_FLWMLW$padj), arr.ind = TRUE)
+
+
+#Create a new data frame to use going forward W/O those padj NAs
+deseq2ResDF_FLWMLW.noNA <- res_FLWMLW[-FLWMLW_napos,]
+
+
+# Keep only the significantly differentiated genes where the fold-change was at least 3
+sigGenes_FLWMLW <- rownames(deseq2ResDF_FLWMLW.noNA[deseq2ResDF_FLWMLW.noNA$padj <= adjP &
+            abs(deseq2ResDF_FLWMLW.noNA$log2FoldChange) > LFC,])
+
+length(sigGenes_FLWMLW)
+
+deseq2VST_FLWMLW <- deseq2VST[deseq2VST$Gene %in% sigGenes_FLWMLW,]
+
+
+# First compare wide vs long version
+deseq2VST_FLWMLW_wide <- deseq2VST_FLWMLW
+deseq2VST_FLWMLW_long <- melt(deseq2VST_FLWMLW, id.vars=c("Gene")) #needed for ggplot
+
+print(deseq2VST_FLWMLW_wide[1:4,1:7])
+head(deseq2VST_FLWMLW_long)
+
+
+###ONLY FLW AND FLQ SAMPLES
+FLWMLW_samplessubset <- rownames(sampleData[which(sampleData$tx_group=="FLW" | sampleData$tx_group=="MLW"),])
+#make empty dataframe for saving in the for loop
+deseq2VST_long_FLWMLWsubset <- data.frame()
+
+for (id in FLWMLW_samplessubset) {
+  subset_id <- deseq2VST_FLWMLW_long[deseq2VST_FLWMLW_long$variable == id, ]  # Subset df by the current value of id
+  # at to the the subset dataframe each iteration
+  deseq2VST_long_FLWMLWsubset <- rbind(deseq2VST_long_FLWMLWsubset, subset_id)
+}
+
+#verifying status of data frame
+# Check if all ids in the variable column of the subsetted list are from the allowed id per the TX group used for the pairwise
+
+
+# Output the result
+invalid_names <- deseq2VST_long_FLWMLWsubset$variable[!deseq2VST_long_FLWMLWsubset$variable %in% FLWMLW_samplessubset]
+if (length(invalid_names) > 0) {
+  print(paste("Invalid IDs in the DF:", paste(invalid_names, collapse = ", ")))
+} else {
+  print("All IDs in the DF are valid.")
+}
+
+```
+
+```{r makeheatmap_FLWMLW, eval=FALSE, fig.height=3, echo=FALSE}
+# Make a heatmap
+ggplot(deseq2VST_long_FLWMLWsubset, aes(x=variable, y=Gene, fill=value)) +
+  geom_raster() +
+  scale_fill_viridis(trans="sqrt") +
+  theme(axis.text.x=element_text(angle=65, hjust=1),
+        axis.text.y=element_blank(),
+        axis.ticks.y=element_blank())
+```
+
+```{r clusteredheatmap_FLWMLW, fig.height=4, echo=FALSE}
+# Convert the significant genes back to a atrix for clustering
+deseq2VSTMatrix_FLWMLW <- dcast(deseq2VST_long_FLWMLWsubset, Gene ~ variable)
+rownames(deseq2VSTMatrix_FLWMLW) <- deseq2VSTMatrix_FLWMLW$Gene
+deseq2VSTMatrix_FLWMLW$Gene <- NULL
+
+# Compute a distance calculation on both dimensions of the matrix
+#dist() computes the distance based on the rows of the df
+#in the current format, gives distance based on genes
+distanceGene_FLWMLW <- dist(deseq2VSTMatrix_FLWMLW)
+#transpose to get distance based on samples
+distanceSample_FLWMLW <- dist(t(deseq2VSTMatrix_FLWMLW))
+
+# Cluster based on the distance calculations
+#hclust: hierarchical cluster
+clusterGene_FLWMLW <- hclust(distanceGene_FLWMLW, method="average")
+clusterSample_FLWMLW <- hclust(distanceSample_FLWMLW, method="average")
+
+#get specific colors by TX group:
+clustorder_FLWMLW <- clusterSample_FLWMLW$order
+color_vector_FLWMLW <- vector("character", length(clustorder_FLWMLW))
+
+# Loop through each name in clustorder_FLWMLW
+for (i in 1:length(clustorder_FLWMLW)) {
+  name <- clustorder_FLWMLW[i]
+
+  # Check if the name exists in rownames of sampleData and if the tx_group is "FLW"
+  if (name >= 7) {
+    color_vector_FLWMLW[i] <- "yellowgreen"  # Assign green if the name matches "FLW" in tx_group
+  } else {
+    color_vector_FLWMLW[i] <- "coral"   # Assign blue if the name does not match "FLW"
+  }
+}
+
+
+
+color_vector_FLWMLW_xcol <- c("coral","coral","coral","coral","yellowgreen","yellowgreen","yellowgreen","yellowgreen","coral","yellowgreen","coral","yellowgreen")
+
+color_vector_FLWMLW == color_vector_FLWMLW_xcol
+
+
+# Construct a dendogram for samples
+sampleModel_FLWMLW <- as.dendrogram(clusterSample_FLWMLW)
+sampleDendrogramData_FLWMLW <- segment(dendro_data(sampleModel_FLWMLW, type = "rectangle"))
+sampleDendrogram_FLWMLW <- ggplot(sampleDendrogramData_FLWMLW) +
+  geom_segment(aes(x = x, y = y, xend = xend, yend = yend)) +
+  theme_dendro()
+
+# Re-factor samples for ggplot2
+#use to match dendogram
+deseq2VST_long_FLWMLWsubset$variable <- factor(deseq2VST_long_FLWMLWsubset$variable,levels=clusterSample_FLWMLW$labels[clusterSample_FLWMLW$order])
+
+# Construct the heatmap. note that at this point we have only clustered the samples NOT the genes
+heatmap_FLWMLW <- ggplot(deseq2VST_long_FLWMLWsubset, aes(x=variable, y=Gene, fill=value)) +
+  geom_raster() +
+  scale_fill_viridis(trans="sqrt") +
+  theme(axis.text.x=element_text(angle=65, hjust=1, color = color_vector_FLWMLW),
+        #axis.text.y=element_blank(),
+        axis.ticks.y=element_blank(),
+        plot.margin = unit(c(-.75, 0, 0, 0), "cm"))
+
+# Combine the dendrogram and the heatmap
+#install.packages("gridExtra")
+
+
+titleFLWMLW <- ggdraw() + draw_label("Significant Genes for FL workers (yellow-green) v ML workers (coral)", fontface='bold')
+plot_grid(titleFLWMLW, NULL, sampleDendrogram_FLWMLW, NULL, heatmap_FLWMLW, NULL, align= "v", ncol=2, nrow=3, rel_heights = c(.1,.7,1,1,1,1), rel_widths = c(2.7,.1,2.7,.1,2.5,.1))
+```
+
+
+```{r regdirection_FLWMLW, fig.height=7, echo=FALSE}
+DEGs_FLWMLW <- deseq2ResDF_FLWMLW.noNA[rownames(deseq2ResDF_FLWMLW.noNA) %in% sigGenes_FLWMLW,]
+
+#write the DEGs and data to CSV
+write.csv(DEGs_FLWMLW,"SigGeneLists/DEGs_FLWMLW.csv", row.names = TRUE)
+DEG_genelist_FLWMLW <- rownames(DEGs_FLWMLW)
+#write gene list to txt
+write.table(DEG_genelist_FLWMLW,"SigGeneLists/DEG_genelist_FLWMLW.txt", row.names = FALSE, col.names = FALSE, quote=FALSE)
+
+
+DEGs.FCdir_FLWMLW <- DEGs_FLWMLW[,c("log2FoldChange", "padj")]
+length(DEGs.FCdir_FLWMLW$log2FoldChange)
+
+
+DEGs.FCdir_FLWMLW
+
+
+#FOR GSEA
+write.csv(res_FLWMLW,"DEGFullResults/DEGananalysisResults_FLWMLW.csv", row.names = TRUE)
+```
+
+
+### FLW V QLW
+
+```{r extractDEseq_FLWQLW}
+# Extract differential expression results
+# For "tx_group" perform primary vs normal comparison
+res_FLWQLW <- results(deseq2Data, contrast=c("tx_group", "FLW", "QLW"), independentFiltering=FALSE, pAdjustMethod = "BH")
+
+# View summary of results
+summary(res_FLWQLW, alpha=0.05)
+summary(res_FLWQLW, alpha=0.10)
+summary(res_FLWQLW, alpha=0.01)
+```
+
+
+```{r MA_FLWQLW, warning=FALSE}
+# Using DEseq2 built in method
+plotMA(res_FLWQLW, alpha=0.05)
+```
+
+
+```{r ggplotsMA_FLWQLW, warning=FALSE}
+# Coerce to a data frame
+res_FLWQLW <- as.data.frame(res_FLWQLW)
+
+# Examine this data frame
+head(res_FLWQLW)
+
+# Set a boolean column for significance
+res_FLWQLW$significant <- ifelse(res_FLWQLW$padj < adjP, "Significant", NA)
+
+#FOR GSEA Here because don't move on below
+write.csv(res_FLWQLW,"DEGFullResults/DEGananalysisResults_FLWQLW.csv", row.names = TRUE)
+
+# Let's add some more detail
+ggplot(res_FLWQLW, aes(baseMean, log2FoldChange, colour=padj)) +
+geom_point(size=1) +
+scale_y_continuous(limits=c(-3, 3), oob=squish) +
+scale_x_log10() +
+geom_hline(yintercept = 0, colour="darkorchid4", size=1, linetype="longdash") +
+labs(x="mean of normalized counts", y="log fold change") +
+scale_colour_viridis(direction=-1, trans='sqrt') +
+theme_bw() +
+  geom_density_2d(colour="black", size=1)
+```
+
+No significant gene, so I will not move forward with producing a heatmap.
+<!-- ####Remove outliers and Subset by TX -->
+<!-- ```{r outliers_FLWQLW} -->
+<!-- #VERIFY COUNT -->
+<!-- #Assess number of genes with adjustedp=NA; N=14 -->
+<!-- count(is.na(res_FLWQLW$padj)) -->
+
+<!-- #VERIFY SAME POSITIONS ACROSS ALL PAIRWISE -->
+<!-- _FLWQLW_napos <- which(is.na(res_FLWQLW$padj), arr.ind = TRUE) -->
+
+
+<!-- #Create a new data frame to use going forward W/O those padj NAs -->
+<!-- deseq2ResDF_FLWQLW.noNA <- res_FLWQLW[-_FLWQLW_napos,] -->
+
+
+<!-- # Keep only the significantly differentiated genes where the fold-change was at least 3 -->
+<!-- sigGenes_FLWQLW <- rownames(deseq2ResDF_FLWQLW.noNA[deseq2ResDF_FLWQLW.noNA$padj <= .01 &  -->
+<!--             abs(deseq2ResDF_FLWQLW.noNA$log2FoldChange) > 3,]) -->
+
+<!-- length(sigGenes_FLWQLW) -->
+
+<!-- deseq2VST_FLWQLW <- deseq2VST[deseq2VST$Gene %in% sigGenes_FLWQLW,] -->
+
+
+<!-- # First compare wide vs long version -->
+<!-- deseq2VST_FLWQLW_wide <- deseq2VST_FLWQLW -->
+<!-- deseq2VST_FLWQLW_long <- melt(deseq2VST_FLWQLW, id.vars=c("Gene")) #needed for ggplot -->
+
+<!-- print(deseq2VST_FLWQLW_wide[1:5,1:7]) -->
+<!-- head(deseq2VST_FLWQLW_long) -->
+
+
+<!-- ###ONLY FLW AND FLQ SAMPLES -->
+<!-- FLWQLW_samplessubset <- rownames(sampleData[which(sampleData$tx_group=="FLW" | sampleData$tx_group=="QLW"),]) -->
+<!-- #make empty dataframe for saving in the for loop -->
+<!-- deseq2VST_long_FLWQLWsubset <- data.frame() -->
+
+<!-- for (id in FLWQLW_samplessubset) { -->
+<!--   subset_id <- deseq2VST_FLWQLW_long[deseq2VST_FLWQLW_long$variable == id, ]  # Subset df by the current value of id -->
+<!--   # at to the the subset dataframe each iteration -->
+<!--   deseq2VST_long_FLWQLWsubset <- rbind(deseq2VST_long_FLWQLWsubset, subset_id) -->
+<!-- } -->
+
+<!-- #verifying status of data frame -->
+<!-- # Check if all ids in the variable column of the subsetted list are from the allowed id per the TX group used for the pairwise -->
+
+
+<!-- # Output the result -->
+<!-- invalid_names <- deseq2VST_long_FLWQLWsubset$variable[!deseq2VST_long_FLWQLWsubset$variable %in% FLWQLW_samplessubset] -->
+<!-- if (length(invalid_names) > 0) { -->
+<!--   print(paste("Invalid IDs in the DF:", paste(invalid_names, collapse = ", "))) -->
+<!-- } else { -->
+<!--   print("All IDs in the DF are valid.") -->
+<!-- } -->
+
+<!-- ``` -->
+
+
+<!-- ```{r makeheatmap_FLWQLW, eval=FALSE, fig.height=3} -->
+<!-- # Make a heatmap -->
+<!-- ggplot(deseq2VST_long_FLWQLWsubset, aes(x=variable, y=Gene, fill=value)) +  -->
+<!--   geom_raster() +  -->
+<!--   scale_fill_viridis(trans="sqrt") +  -->
+<!--   theme(axis.text.x=element_text(angle=65, hjust=1),  -->
+<!--         axis.text.y=element_blank(),  -->
+<!--         axis.ticks.y=element_blank()) -->
+<!-- ``` -->
+
+
+
+<!-- ```{r clusteredheatmap_FLWQLW, fig.height=2.5} -->
+<!-- # Convert the significant genes back to a atrix for clustering -->
+<!-- deseq2VSTMatrix_FLWQLW <- dcast(deseq2VST_long_FLWQLWsubset, Gene ~ variable) -->
+<!-- rownames(deseq2VSTMatrix_FLWQLW) <- deseq2VSTMatrix_FLWQLW$Gene -->
+<!-- deseq2VSTMatrix_FLWQLW$Gene <- NULL -->
+
+<!-- # Compute a distance calculation on both dimensions of the matrix -->
+<!-- #dist() computes the distance based on the rows of the df -->
+<!-- #in the current format, gives distance based on genes -->
+<!-- distanceGene_FLWQLW <- dist(deseq2VSTMatrix_FLWQLW) -->
+<!-- #transpose to get distance based on samples -->
+<!-- distanceSample_FLWQLW <- dist(t(deseq2VSTMatrix_FLWQLW)) -->
+
+<!-- # Cluster based on the distance calculations -->
+<!-- #hclust: hierarchical cluster -->
+<!-- clusterGene_FLWQLW <- hclust(distanceGene_FLWQLW, method="average") -->
+<!-- clusterSample_FLWQLW <- hclust(distanceSample_FLWQLW, method="average") -->
+
+<!-- #get specific colors by TX group: -->
+<!-- clustorder_FLWQLW <- clusterSample_FLWQLW$labels -->
+<!-- color_vector_FLWQLW <- vector("character", length(clustorder_FLWQLW)) -->
+<!-- # Loop through each name in clustorder_FLWQLW -->
+<!-- for (i in 1:length(clustorder_FLWQLW)) { -->
+<!--   name <- clustorder_FLWQLW[i] -->
+
+<!--   # Check if the name exists in rownames of sampleData and if the tx_group is "FLW" -->
+<!--   if (name %in% rownames(sampleData) && sampleData[name, "tx_group"] == "FLW") { -->
+<!--     color_vector_FLWQLW[i] <- "yellowgreen"  # Assign green if the name matches "FLW" in tx_group -->
+<!--   } else { -->
+<!--     color_vector_FLWQLW[i] <- "purple1"   # Assign blue if the name does not match "FLW" -->
+<!--   } -->
+<!-- } -->
+
+
+<!-- # Construct a dendogram for samples -->
+<!-- sampleModel_FLWQLW <- as.dendrogram(clusterSample_FLWQLW) -->
+<!-- sampleDendrogramData_FLWQLW <- segment(dendro_data(sampleModel_FLWQLW, type = "rectangle")) -->
+<!-- sampleDendrogram_FLWQLW <- ggplot(sampleDendrogramData_FLWQLW) +  -->
+<!--   geom_segment(aes(x = x, y = y, xend = xend, yend = yend)) +  -->
+<!--   theme_dendro() -->
+
+<!-- # Re-factor samples for ggplot2 -->
+<!-- #use to match dendogram -->
+<!-- deseq2VST_long_FLWQLWsubset$variable <- factor(deseq2VST_long_FLWQLWsubset$variable,levels=clusterSample_FLWQLW$labels[clusterSample_FLWQLW$order]) -->
+
+<!-- # Construct the heatmap. note that at this point we have only clustered the samples NOT the genes -->
+<!-- heatmap_FLWQLW <- ggplot(deseq2VST_long_FLWQLWsubset, aes(x=variable, y=Gene, fill=value)) +  -->
+<!--   geom_raster() +  -->
+<!--   scale_fill_viridis(trans="sqrt") +  -->
+<!--   theme(axis.text.x=element_text(angle=65, hjust=1, color = color_vector_FLWQLW), -->
+<!--         #axis.text.y=element_blank(),  -->
+<!--         axis.ticks.y=element_blank(), -->
+<!--         plot.margin = unit(c(-.75, 0, 0, 0), "cm")) -->
+
+<!-- # Combine the dendrogram and the heatmap -->
+<!-- #install.packages("gridExtra") -->
+<!-- plot_grid(sampleDendrogram_FLWQLW, NULL, heatmap_FLWQLW, NULL, align= "v", ncol=2, nrow=2, rel_heights = c(.7,1,1,1), rel_widths = c(2.7,.1,2.5,.1)) -->
+<!-- ``` -->
+
+
+
+### MLW V QLW
+
+```{r extractDEseq_MLWQLW}
+# Extract differential expression results
+# For "tx_group" perform primary vs normal comparison
+res_MLWQLW <- results(deseq2Data, contrast=c("tx_group", "MLW", "QLW"), independentFiltering=FALSE, pAdjustMethod = "BH")
+
+# View summary of results
+summary(res_MLWQLW, alpha=0.05)
+summary(res_MLWQLW, alpha=0.10)
+summary(res_MLWQLW, alpha=0.01)
+```
+
+
+```{r MA_MLWQLW, warning=FALSE}
+# Using DEseq2 built in method
+plotMA(res_MLWQLW, alpha=0.05)
+```
+
+
+```{r ggplotsMA_MLWQLW, warning=FALSE}
+# Coerce to a data frame
+res_MLWQLW <- as.data.frame(res_MLWQLW)
+
+# Examine this data frame
+head(res_MLWQLW)
+
+# Set a boolean column for significance
+res_MLWQLW$significant <- ifelse(res_MLWQLW$padj < adjP, "Significant", NA)
+
+#FOR GSEA Here because don't move on below
+write.csv(res_MLWQLW,"DEGFullResults/DEGananalysisResults_MLWQLW.csv", row.names = TRUE)
+
+# Let's add some more detail
+ggplot(res_MLWQLW, aes(baseMean, log2FoldChange, colour=padj)) +
+geom_point(size=1) +
+scale_y_continuous(limits=c(-3, 3), oob=squish) +
+scale_x_log10() +
+geom_hline(yintercept = 0, colour="darkorchid4", size=1, linetype="longdash") +
+labs(x="mean of normalized counts", y="log fold change") +
+scale_colour_viridis(direction=-1, trans='sqrt') +
+theme_bw() +
+  geom_density_2d(colour="black", size=1)
+```
+
+No significant genes. Not continuing for this set.
+
+<!-- ####Remove outliers and Subset by TX -->
+<!-- ```{r outliers_MLWQLW} -->
+<!-- #VERIFY COUNT -->
+<!-- #Assess number of genes with adjustedp=NA; N=14 -->
+<!-- count(is.na(res_MLWQLW$padj)) -->
+
+<!-- #VERIFY SAME POSITIONS ACROSS ALL PAIRWISE -->
+<!-- MLWQLW_napos <- which(is.na(res_MLWQLW$padj), arr.ind = TRUE) -->
+
+
+<!-- #Create a new data frame to use going forward W/O those padj NAs -->
+<!-- deseq2ResDF_MLWQLW.noNA <- res_MLWQLW[-MLWQLW_napos,] -->
+
+
+<!-- # Keep only the significantly differentiated genes where the fold-change was at least 3 -->
+<!-- sigGenes_MLWQLW <- rownames(deseq2ResDF_MLWQLW.noNA[deseq2ResDF_MLWQLW.noNA$padj <= .01 & -->
+<!--             abs(deseq2ResDF_MLWQLW.noNA$log2FoldChange) > 3,]) -->
+<!-- #Nothing sig at 0.05 padj or 2-fold -->
+<!-- #confirmed when looking at the dataset -->
+
+
+<!-- length(sigGenes_MLWQLW) -->
+
+<!-- deseq2VST_MLWQLW <- deseq2VST[deseq2VST$Gene %in% sigGenes_MLWQLW,] -->
+
+
+<!-- # First compare wide vs long version -->
+<!-- deseq2VST_MLWQLW_wide <- deseq2VST_MLWQLW -->
+<!-- deseq2VST_MLWQLW_long <- melt(deseq2VST_MLWQLW, id.vars=c("Gene")) #needed for ggplot -->
+
+<!-- #print(deseq2VST_MLWQLW_wide[1:5,1:7]) -->
+<!-- #head(deseq2VST_MLWQLW_long) -->
+
+
+<!-- ###ONLY FLW AND FLQ SAMPLES -->
+<!-- MLWQLW_samplessubset <- rownames(sampleData[which(sampleData$tx_group=="FLW" | sampleData$tx_group=="MLW"),]) -->
+<!-- #make empty dataframe for saving in the for loop -->
+<!-- deseq2VST_long_MLWQLWsubset <- data.frame() -->
+
+<!-- for (id in MLWQLW_samplessubset) { -->
+<!--   subset_id <- deseq2VST_MLWQLW_long[deseq2VST_MLWQLW_long$variable == id, ]  # Subset df by the current value of id -->
+<!--   # at to the the subset dataframe each iteration -->
+<!--   deseq2VST_long_MLWQLWsubset <- rbind(deseq2VST_long_MLWQLWsubset, subset_id) -->
+<!-- } -->
+
+<!-- #verifying status of data frame -->
+<!-- # Check if all ids in the variable column of the subsetted list are from the allowed id per the TX group used for the pairwise -->
+
+
+<!-- # Output the result -->
+<!-- invalid_names <- deseq2VST_long_MLWQLWsubset$variable[!deseq2VST_long_MLWQLWsubset$variable %in% MLWQLW_samplessubset] -->
+<!-- if (length(invalid_names) > 0) { -->
+<!--   print(paste("Invalid IDs in the DF:", paste(invalid_names, collapse = ", "))) -->
+<!-- } else { -->
+<!--   print("All IDs in the DF are valid.") -->
+<!-- } -->
+
+<!-- ``` -->
+
+
+
+<!-- ```{r makeheatmap_MLWQLW, eval=FALSE, fig.height=3} -->
+<!-- # Make a heatmap -->
+<!-- ggplot(deseq2VST_long_MLWQLWsubset, aes(x=variable, y=Gene, fill=value)) +  -->
+<!--   geom_raster() +  -->
+<!--   scale_fill_viridis(trans="sqrt") +  -->
+<!--   theme(axis.text.x=element_text(angle=65, hjust=1),  -->
+<!--         axis.text.y=element_blank(),  -->
+<!--         axis.ticks.y=element_blank()) -->
+<!-- ``` -->
+
+
+<!-- ```{r clusteredheatmap_MLWQLW, fig.height=2.5} -->
+<!-- # Convert the significant genes back to a atrix for clustering -->
+<!-- deseq2VSTMatrix_MLWQLW <- dcast(deseq2VST_long_MLWQLWsubset, Gene ~ variable) -->
+<!-- rownames(deseq2VSTMatrix_MLWQLW) <- deseq2VSTMatrix_MLWQLW$Gene -->
+<!-- deseq2VSTMatrix_MLWQLW$Gene <- NULL -->
+
+<!-- # Compute a distance calculation on both dimensions of the matrix -->
+<!-- #dist() computes the distance based on the rows of the df -->
+<!-- #in the current format, gives distance based on genes -->
+<!-- distanceGene_MLWQLW <- dist(deseq2VSTMatrix_MLWQLW) -->
+<!-- #transpose to get distance based on samples -->
+<!-- distanceSample_MLWQLW <- dist(t(deseq2VSTMatrix_MLWQLW)) -->
+
+<!-- # Cluster based on the distance calculations -->
+<!-- #hclust: hierarchical cluster -->
+<!-- clusterGene_MLWQLW <- hclust(distanceGene_MLWQLW, method="average") -->
+<!-- clusterSample_MLWQLW <- hclust(distanceSample_MLWQLW, method="average") -->
+
+<!-- #get specific colors by TX group: -->
+<!-- clustorder_MLWQLW <- clusterSample_MLWQLW$labels -->
+<!-- color_vector_MLWQLW <- vector("character", length(clustorder_MLWQLW)) -->
+<!-- # Loop through each name in clustorder_MLWQLW -->
+<!-- for (i in 1:length(clustorder_MLWQLW)) { -->
+<!--   name <- clustorder_MLWQLW[i] -->
+
+<!--   # Check if the name exists in rownames of sampleData and if the tx_group is "FLW" -->
+<!--   if (name %in% rownames(sampleData) && sampleData[name, "tx_group"] == "FLW") { -->
+<!--     color_vector_MLWQLW[i] <- "coral"  # Assign green if the name matches "FLW" in tx_group -->
+<!--   } else { -->
+<!--     color_vector_MLWQLW[i] <- "purple1"   # Assign blue if the name does not match "FLW" -->
+<!--   } -->
+<!-- } -->
+
+
+<!-- # Construct a dendogram for samples -->
+<!-- sampleModel_MLWQLW <- as.dendrogram(clusterSample_MLWQLW) -->
+<!-- sampleDendrogramData_MLWQLW <- segment(dendro_data(sampleModel_MLWQLW, type = "rectangle")) -->
+<!-- sampleDendrogram_MLWQLW <- ggplot(sampleDendrogramData_MLWQLW) +  -->
+<!--   geom_segment(aes(x = x, y = y, xend = xend, yend = yend)) +  -->
+<!--   theme_dendro() -->
+
+<!-- # Re-factor samples for ggplot2 -->
+<!-- #use to match dendogram -->
+<!-- deseq2VST_long_MLWQLWsubset$variable <- factor(deseq2VST_long_MLWQLWsubset$variable,levels=clusterSample_MLWQLW$labels[clusterSample_MLWQLW$order]) -->
+
+<!-- # Construct the heatmap. note that at this point we have only clustered the samples NOT the genes -->
+<!-- heatmap_MLWQLW <- ggplot(deseq2VST_long_MLWQLWsubset, aes(x=variable, y=Gene, fill=value)) +  -->
+<!--   geom_raster() +  -->
+<!--   scale_fill_viridis(trans="sqrt") +  -->
+<!--   theme(axis.text.x=element_text(angle=65, hjust=1, color = color_vector_MLWQLW), -->
+<!--         #axis.text.y=element_blank(),  -->
+<!--         axis.ticks.y=element_blank(), -->
+<!--         plot.margin = unit(c(-.75, 0, 0, 0), "cm")) -->
+
+<!-- # Combine the dendrogram and the heatmap -->
+<!-- #install.packages("gridExtra") -->
+<!-- plot_grid(sampleDendrogram_MLWQLW, NULL, heatmap_MLWQLW, NULL, align= "v", ncol=2, nrow=2, rel_heights = c(.7,1,1,1), rel_widths = c(2.7,.1,2.5,.1)) -->
+<!-- ``` -->
+
+
+
+## Within caste--QUEENS
+### FLQ V MLQ
+
+```{r extractDEseq_FLQMLQ}
+# Extract differential expression results
+# For "tx_group" perform primary vs normal comparison
+res_FLQMLQ <- results(deseq2Data, contrast=c("tx_group", "FLQ", "MLQ"), independentFiltering=FALSE, pAdjustMethod = "BH")
+
+# View summary of results
+summary(res_FLQMLQ, alpha=0.05)
+summary(res_FLQMLQ, alpha=0.10)
+summary(res_FLQMLQ, alpha=0.01)
+```
+
+
+```{r MA_FLQMLQ, warning=FALSE}
+# Using DEseq2 built in method
+plotMA(res_FLQMLQ, alpha=0.05)
+```
+
+
+```{r ggplotsMA_FLQMLQ, warning=FALSE}
+# Coerce to a data frame
+res_FLQMLQ <- as.data.frame(res_FLQMLQ)
+
+# Examine this data frame
+head(res_FLQMLQ)
+
+# Set a boolean column for significance
+res_FLQMLQ$significant <- ifelse(res_FLQMLQ$padj < adjP, "Significant", NA)
+
+# Let's add some more detail
+ggplot(res_FLQMLQ, aes(baseMean, log2FoldChange, colour=padj)) +
+geom_point(size=1) +
+scale_y_continuous(limits=c(-3, 3), oob=squish) +
+scale_x_log10() +
+geom_hline(yintercept = 0, colour="darkorchid4", size=1, linetype="longdash") +
+labs(x="mean of normalized counts", y="log fold change") +
+scale_colour_viridis(direction=-1, trans='sqrt') +
+theme_bw() +
+  geom_density_2d(colour="black", size=1)
+```
+
+
+#### Remove outliers and Subset by TX
+
+```{r outliers_FLQMLQ}
+#VERIFY COUNT
+#Assess number of genes with adjustedp=NA; N=14
+count(is.na(res_FLQMLQ$padj))
+
+#VERIFY SAME POSITIONS ACROSS ALL PAIRWISE
+FLQMLQ_napos <- which(is.na(res_FLQMLQ$padj), arr.ind = TRUE)
+
+
+#Create a new data frame to use going forward W/O those padj NAs
+deseq2ResDF_FLQMLQ.noNA <- res_FLQMLQ[-FLQMLQ_napos,]
+
+
+# Keep only the significantly differentiated genes where the fold-change was at least 3
+sigGenes_FLQMLQ <- rownames(deseq2ResDF_FLQMLQ.noNA[deseq2ResDF_FLQMLQ.noNA$padj <= adjP &
+            abs(deseq2ResDF_FLQMLQ.noNA$log2FoldChange) > LFC,])
+
+length(sigGenes_FLQMLQ)
+
+deseq2VST_FLQMLQ <- deseq2VST[deseq2VST$Gene %in% sigGenes_FLQMLQ,]
+
+
+# First compare wide vs long version
+deseq2VST_FLQMLQ_wide <- deseq2VST_FLQMLQ
+deseq2VST_FLQMLQ_long <- melt(deseq2VST_FLQMLQ, id.vars=c("Gene")) #needed for ggplot
+
+print(deseq2VST_FLQMLQ_wide[1:5,1:7])
+head(deseq2VST_FLQMLQ_long)
+
+
+###ONLY FLQ AND FLQ SAMPLES
+FLQMLQ_samplessubset <- rownames(sampleData[which(sampleData$tx_group=="FLQ" | sampleData$tx_group=="MLQ"),])
+#make empty dataframe for saving in the for loop
+deseq2VST_long_FLQMLQsubset <- data.frame()
+
+for (id in FLQMLQ_samplessubset) {
+  subset_id <- deseq2VST_FLQMLQ_long[deseq2VST_FLQMLQ_long$variable == id, ]  # Subset df by the current value of id
+  # at to the the subset dataframe each iteration
+  deseq2VST_long_FLQMLQsubset <- rbind(deseq2VST_long_FLQMLQsubset, subset_id)
+}
+
+#verifying status of data frame
+# Check if all ids in the variable column of the subsetted list are from the allowed id per the TX group used for the pairwise
+
+
+# Output the result
+invalid_names <- deseq2VST_long_FLQMLQsubset$variable[!deseq2VST_long_FLQMLQsubset$variable %in% FLQMLQ_samplessubset]
+if (length(invalid_names) > 0) {
+  print(paste("Invalid IDs in the DF:", paste(invalid_names, collapse = ", ")))
+} else {
+  print("All IDs in the DF are valid.")
+}
+
+```
+
+```{r makeheatmap_FLQMLQ, eval=FALSE, fig.height=3, echo=FALSE}
+# Make a heatmap
+ggplot(deseq2VST_long_FLQMLQsubset, aes(x=variable, y=Gene, fill=value)) +
+  geom_raster() +
+  scale_fill_viridis(trans="sqrt") +
+  theme(axis.text.x=element_text(angle=65, hjust=1),
+        axis.text.y=element_blank(),
+        axis.ticks.y=element_blank())
+```
+
+```{r clusteredheatmap_FLQMLQ, fig.height=10, echo=FALSE}
+# Convert the significant genes back to a atrix for clustering
+deseq2VSTMatrix_FLQMLQ <- dcast(deseq2VST_long_FLQMLQsubset, Gene ~ variable)
+rownames(deseq2VSTMatrix_FLQMLQ) <- deseq2VSTMatrix_FLQMLQ$Gene
+deseq2VSTMatrix_FLQMLQ$Gene <- NULL
+
+# Compute a distance calculation on both dimensions of the matrix
+#dist() computes the distance based on the rows of the df
+#in the current format, gives distance based on genes
+distanceGene_FLQMLQ <- dist(deseq2VSTMatrix_FLQMLQ)
+#transpose to get distance based on samples
+distanceSample_FLQMLQ <- dist(t(deseq2VSTMatrix_FLQMLQ))
+
+# Cluster based on the distance calculations
+#hclust: hierarchical cluster
+clusterGene_FLQMLQ <- hclust(distanceGene_FLQMLQ, method="average")
+clusterSample_FLQMLQ <- hclust(distanceSample_FLQMLQ, method="average")
+
+#get specific colors by TX group:
+clustorder_FLQMLQ <- clusterSample_FLQMLQ$order
+color_vector_FLQMLQ <- vector("character", length(clustorder_FLQMLQ))
+# Loop through each name in clustorder_FLQMLQ
+for (i in 1:length(clustorder_FLQMLQ)) {
+  name <- clustorder_FLQMLQ[i]
+
+  # Check if the name exists in rownames of sampleData and if the tx_group is "FLW"
+  #GREATER THAN 7 BECAUSE FLQ COMES BEFORE MLQ IN SEQ INPUT
+  if (name >= 7) {
+    color_vector_FLQMLQ[i] <- "yellowgreen"  # Assign green if the name matches "FLW" in tx_group
+  } else {
+    color_vector_FLQMLQ[i] <- "coral"   # Assign blue if the name does not match "FLW"
+  }
+}
+
+
+
+color_vector_FLQMLQ_xcol <- c("yellowgreen","coral","coral","coral","coral","yellowgreen","coral","coral","yellowgreen","yellowgreen","yellowgreen")
+
+color_vector_FLQMLQ == color_vector_FLQMLQ_xcol
+
+
+# Construct a dendogram for samples
+sampleModel_FLQMLQ <- as.dendrogram(clusterSample_FLQMLQ)
+sampleDendrogramData_FLQMLQ <- segment(dendro_data(sampleModel_FLQMLQ, type = "rectangle"))
+sampleDendrogram_FLQMLQ <- ggplot(sampleDendrogramData_FLQMLQ) +
+  geom_segment(aes(x = x, y = y, xend = xend, yend = yend)) +
+  theme_dendro()
+
+# Re-factor samples for ggplot2
+#use to match dendogram
+deseq2VST_long_FLQMLQsubset$variable <- factor(deseq2VST_long_FLQMLQsubset$variable,levels=clusterSample_FLQMLQ$labels[clusterSample_FLQMLQ$order])
+
+# Construct the heatmap. note that at this point we have only clustered the samples NOT the genes
+heatmap_FLQMLQ <- ggplot(deseq2VST_long_FLQMLQsubset, aes(x=variable, y=Gene, fill=value)) +
+  geom_raster() +
+  scale_fill_viridis(trans="sqrt") +
+  theme(axis.text.x=element_text(angle=65, hjust=1, color = color_vector_FLQMLQ),
+        #axis.text.y=element_blank(),
+        axis.ticks.y=element_blank(),
+        plot.margin = unit(c(-.75, 0, 0, 0), "cm"))
+
+# Combine the dendrogram and the heatma
+titleFLQMLQ <- ggdraw() + draw_label("Significant Genes for FL queen (yellow-green) v ML queen (coral)", fontface='bold')
+plot_grid(titleFLQMLQ, NULL, sampleDendrogram_FLQMLQ, NULL, heatmap_FLQMLQ, NULL, align= "v", ncol=2, nrow=3, rel_heights = c(.05,.2,1,1,1,1), rel_widths = c(2.7,.1,2.7,.1,2.5,.1))
+```
+
+
+```{r regdirection_FLQMLQ, fig.height=7, echo=FALSE}
+DEGs_FLQMLQ <- deseq2ResDF_FLQMLQ.noNA[rownames(deseq2ResDF_FLQMLQ.noNA) %in% sigGenes_FLQMLQ,]
+
+#write the DEGs and data to CSV
+write.csv(DEGs_FLQMLQ,"SigGeneLists/DEGs_FLQMLQ.csv", row.names = TRUE)
+DEG_genelist_FLQMLQ <- rownames(DEGs_FLQMLQ)
+#write gene list to txt
+write.table(DEG_genelist_FLQMLQ,"SigGeneLists/DEG_genelist_FLQMLQ.txt", row.names = FALSE, col.names = FALSE, quote=FALSE)
+
+
+DEGs.FCdir_FLQMLQ <- DEGs_FLQMLQ[,c("log2FoldChange", "padj")]
+length(DEGs.FCdir_FLQMLQ$log2FoldChange)
+
+
+DEGs.FCdir_FLQMLQ
+
+#FOR GSEA
+write.csv(res_FLQMLQ,"DEGFullResults/DEGananalysisResults_FLQMLQ.csv", row.names = TRUE)
+```
+
+
+
+### FLQ V QLQ
+
+```{r extractDEseq_FLQQLQ}
+# Extract differential expression results
+# For "tx_group" perform primary vs normal comparison
+res_FLQQLQ <- results(deseq2Data, contrast=c("tx_group", "FLQ", "QLQ"), independentFiltering=FALSE, pAdjustMethod = "BH")
+
+# View summary of results
+summary(res_FLQQLQ, alpha=0.05)
+summary(res_FLQQLQ, alpha=0.10)
+summary(res_FLQQLQ, alpha=0.01)
+```
+
+
+```{r MA_FLQQLQ, warning=FALSE}
+# Using DEseq2 built in method
+plotMA(res_FLQQLQ, alpha=0.05)
+```
+
+
+```{r ggplotsMA_FLQQLQ, warning=FALSE}
+# Coerce to a data frame
+res_FLQQLQ <- as.data.frame(res_FLQQLQ)
+
+# Examine this data frame
+head(res_FLQQLQ)
+
+# Set a boolean column for significance
+res_FLQQLQ$significant <- ifelse(res_FLQQLQ$padj < adjP, "Significant", NA)
+
+# Let's add some more detail
+ggplot(res_FLQQLQ, aes(baseMean, log2FoldChange, colour=padj)) +
+geom_point(size=1) +
+scale_y_continuous(limits=c(-3, 3), oob=squish) +
+scale_x_log10() +
+geom_hline(yintercept = 0, colour="darkorchid4", size=1, linetype="longdash") +
+labs(x="mean of normalized counts", y="log fold change") +
+scale_colour_viridis(direction=-1, trans='sqrt') +
+theme_bw() +
+  geom_density_2d(colour="black", size=1)
+```
+
+
+#### Remove outliers and Subset by TX
+
+```{r outliers_FLQQLQ}
+#VERIFY COUNT
+#Assess number of genes with adjustedp=NA; N=14
+count(is.na(res_FLQQLQ$padj))
+
+#VERIFY SAME POSITIONS ACROSS ALL PAIRWISE
+FLQQLQ_napos <- which(is.na(res_FLQQLQ$padj), arr.ind = TRUE)
+
+
+#Create a new data frame to use going forward W/O those padj NAs
+deseq2ResDF_FLQQLQ.noNA <- res_FLQQLQ[-FLQQLQ_napos,]
+
+
+# Keep only the significantly differentiated genes where the fold-change was at least 3
+sigGenes_FLQQLQ <- rownames(deseq2ResDF_FLQQLQ.noNA[deseq2ResDF_FLQQLQ.noNA$padj <= adjP &
+            abs(deseq2ResDF_FLQQLQ.noNA$log2FoldChange) > LFC,])
+
+length(sigGenes_FLQQLQ)
+
+deseq2VST_FLQQLQ <- deseq2VST[deseq2VST$Gene %in% sigGenes_FLQQLQ,]
+
+
+# First compare wide vs long version
+deseq2VST_FLQQLQ_wide <- deseq2VST_FLQQLQ
+deseq2VST_FLQQLQ_long <- melt(deseq2VST_FLQQLQ, id.vars=c("Gene")) #needed for ggplot
+
+print(deseq2VST_FLQQLQ_wide[1:3,1:7])
+head(deseq2VST_FLQQLQ_long)
+
+
+###ONLY FLQ AND FLQ SAMPLES
+FLQQLQ_samplessubset <- rownames(sampleData[which(sampleData$tx_group=="FLQ" | sampleData$tx_group=="QLQ"),])
+#make empty dataframe for saving in the for loop
+deseq2VST_long_FLQQLQsubset <- data.frame()
+
+for (id in FLQQLQ_samplessubset) {
+  subset_id <- deseq2VST_FLQQLQ_long[deseq2VST_FLQQLQ_long$variable == id, ]  # Subset df by the current value of id
+  # at to the the subset dataframe each iteration
+  deseq2VST_long_FLQQLQsubset <- rbind(deseq2VST_long_FLQQLQsubset, subset_id)
+}
+
+#verifying status of data frame
+# Check if all ids in the variable column of the subsetted list are from the allowed id per the TX group used for the pairwise
+
+
+# Output the result
+invalid_names <- deseq2VST_long_FLQQLQsubset$variable[!deseq2VST_long_FLQQLQsubset$variable %in% FLQQLQ_samplessubset]
+if (length(invalid_names) > 0) {
+  print(paste("Invalid IDs in the DF:", paste(invalid_names, collapse = ", ")))
+} else {
+  print("All IDs in the DF are valid.")
+}
+
+```
+
+```{r makeheatmap_FLQQLQ, eval=FALSE, fig.height=3, echo=FALSE}
+# Make a heatmap
+ggplot(deseq2VST_long_FLQQLQsubset, aes(x=variable, y=Gene, fill=value)) +
+  geom_raster() +
+  scale_fill_viridis(trans="sqrt") +
+  theme(axis.text.x=element_text(angle=65, hjust=1),
+        axis.text.y=element_blank(),
+        axis.ticks.y=element_blank())
+```
+
+```{r clusteredheatmap_FLQQLQ, fig.height=6, echo=FALSE}
+# Convert the significant genes back to a atrix for clustering
+deseq2VSTMatrix_FLQQLQ <- dcast(deseq2VST_long_FLQQLQsubset, Gene ~ variable)
+rownames(deseq2VSTMatrix_FLQQLQ) <- deseq2VSTMatrix_FLQQLQ$Gene
+deseq2VSTMatrix_FLQQLQ$Gene <- NULL
+
+# Compute a distance calculation on both dimensions of the matrix
+#dist() computes the distance based on the rows of the df
+#in the current format, gives distance based on genes
+distanceGene_FLQQLQ <- dist(deseq2VSTMatrix_FLQQLQ)
+#transpose to get distance based on samples
+distanceSample_FLQQLQ <- dist(t(deseq2VSTMatrix_FLQQLQ))
+
+# Cluster based on the distance calculations
+#hclust: hierarchical cluster
+clusterGene_FLQQLQ <- hclust(distanceGene_FLQQLQ, method="average")
+clusterSample_FLQQLQ <- hclust(distanceSample_FLQQLQ, method="average")
+
+#get specific colors by TX group:
+clustorder_FLQQLQ <- clusterSample_FLQQLQ$order
+color_vector_FLQQLQ <- vector("character", length(clustorder_FLQQLQ))
+# Loop through each name in clustorder_FLQQLQ
+for (i in 1:length(clustorder_FLQQLQ)) {
+  name <- clustorder_FLQQLQ[i]
+
+  # Check if the name exists in rownames of sampleData and if the tx_group is "FLW"
+  #GREATER THAN 7 BECAUSE FLQ COMES BEFORE MLQ IN SEQ INPUT
+  if (name >= 6) {
+    color_vector_FLQQLQ[i] <- "yellowgreen"  # Assign green if the name matches "FLW" in tx_group
+  } else {
+    color_vector_FLQQLQ[i] <- "purple1"   # Assign blue if the name does not match "FLW"
+  }
+}
+
+
+
+color_vector_FLQQLQ_xcol <- c("yellowgreen","yellowgreen","yellowgreen","yellowgreen","yellowgreen","purple1","purple1","purple1","purple1","purple1")
+
+color_vector_FLQQLQ == color_vector_FLQQLQ_xcol
+
+# Construct a dendogram for samples
+sampleModel_FLQQLQ <- as.dendrogram(clusterSample_FLQQLQ)
+sampleDendrogramData_FLQQLQ <- segment(dendro_data(sampleModel_FLQQLQ, type = "rectangle"))
+sampleDendrogram_FLQQLQ <- ggplot(sampleDendrogramData_FLQQLQ) +
+  geom_segment(aes(x = x, y = y, xend = xend, yend = yend)) +
+  theme_dendro()
+
+# Re-factor samples for ggplot2
+#use to match dendogram
+deseq2VST_long_FLQQLQsubset$variable <- factor(deseq2VST_long_FLQQLQsubset$variable,levels=clusterSample_FLQQLQ$labels[clusterSample_FLQQLQ$order])
+
+# Construct the heatmap. note that at this point we have only clustered the samples NOT the genes
+heatmap_FLQQLQ <- ggplot(deseq2VST_long_FLQQLQsubset, aes(x=variable, y=Gene, fill=value)) +
+  geom_raster() +
+  scale_fill_viridis(trans="sqrt") +
+  theme(axis.text.x=element_text(angle=65, hjust=1, color = color_vector_FLQQLQ_xcol),
+        #axis.text.y=element_blank(),
+        axis.ticks.y=element_blank(),
+        plot.margin = unit(c(-.75, 0, 0, 0), "cm"))
+
+# Combine the dendrogram and the heatmap
+#install.packages("gridExtra")
+
+titleFLQQLQ <- ggdraw() + draw_label("Significant Genes for FL queen (yellow-green) v QL queen (purple)", fontface='bold')
+plot_grid(titleFLQQLQ, NULL, sampleDendrogram_FLQQLQ, NULL, heatmap_FLQQLQ, NULL, align= "v", ncol=2, nrow=3, rel_heights = c(.1,.4,1,1,1,1), rel_widths = c(2.7,.1,2.7,.1,2.5,.1))
+
+```
+
+
+```{r regdirection_FLQQLQ, fig.height=7, echo=FALSE}
+DEGs_FLQQLQ <- deseq2ResDF_FLQQLQ.noNA[rownames(deseq2ResDF_FLQQLQ.noNA) %in% sigGenes_FLQQLQ,]
+
+
+#write the DEGs and data to CSV
+write.csv(DEGs_FLQQLQ,"SigGeneLists/DEGs_FLQQLQ.csv", row.names = TRUE)
+DEG_genelist_FLQQLQ <- rownames(DEGs_FLQQLQ)
+#write gene list to txt
+write.table(DEG_genelist_FLQQLQ,"SigGeneLists/DEG_genelist_FLQQLQ.txt", row.names = FALSE, col.names = FALSE, quote=FALSE)
+
+
+DEGs.FCdir_FLQQLQ <- DEGs_FLQQLQ[,c("log2FoldChange", "padj")]
+length(DEGs.FCdir_FLQQLQ$log2FoldChange)
+
+
+DEGs.FCdir_FLQQLQ
+
+
+#FOR GSEA
+write.csv(res_FLQQLQ,"DEGFullResults/DEGananalysisResults_FLQQLQ.csv", row.names = TRUE)
+```
+
+
+### MLQ V QLQ
+
+```{r extractDEseq_MLQQLQ}
+# Extract differential expression results
+# For "tx_group" perform primary vs normal comparison
+res_MLQQLQ <- results(deseq2Data, contrast=c("tx_group", "MLQ", "QLQ"), independentFiltering=FALSE, pAdjustMethod = "BH")
+
+# View summary of results
+summary(res_MLQQLQ, alpha=0.05)
+summary(res_MLQQLQ, alpha=0.10)
+summary(res_MLQQLQ, alpha=0.01)
+```
+
+
+```{r MA_MLQQLQ, warning=FALSE, fig.height=5.5}
+# Using DEseq2 built in method
+plotMA(res_MLQQLQ, alpha=0.05)
+```
+
+
+```{r ggplotsMA_MLQQLQ, warning=FALSE}
+# Coerce to a data frame
+res_MLQQLQ <- as.data.frame(res_MLQQLQ)
+
+# Examine this data frame
+head(res_MLQQLQ)
+
+# Set a boolean column for significance
+res_MLQQLQ$significant <- ifelse(res_MLQQLQ$padj < adjP, "Significant", NA)
+
+#FOR GSEA HEre because they don't have genes that are sign at the thresholds
+write.csv(res_MLQQLQ,"DEGFullResults/DEGananalysisResults_MLQQLQ.csv", row.names = TRUE)
+
+
+
+# Let's add some more detail
+ggplot(res_MLQQLQ, aes(baseMean, log2FoldChange, colour=padj)) +
+geom_point(size=1) +
+scale_y_continuous(limits=c(-3, 3), oob=squish) +
+scale_x_log10() +
+geom_hline(yintercept = 0, colour="darkorchid4", size=1, linetype="longdash") +
+labs(x="mean of normalized counts", y="log fold change") +
+scale_colour_viridis(direction=-1, trans='sqrt') +
+theme_bw() +
+  geom_density_2d(colour="black", size=1)
+```
+
+
+####Remove outliers and Subset by TX
+
+```{r outliers_MLQQLQ}
+#VERIFY COUNT
+#Assess number of genes with adjustedp=NA; N=14
+count(is.na(res_MLQQLQ$padj))
+
+#VERIFY SAME POSITIONS ACROSS ALL PAIRWISE
+MLQQLQ_napos <- which(is.na(res_MLQQLQ$padj), arr.ind = TRUE)
+
+
+#Create a new data frame to use going forward W/O those padj NAs
+deseq2ResDF_MLQQLQ.noNA <- res_MLQQLQ[-MLQQLQ_napos,]
+
+
+# Keep only the significantly differentiated genes where the fold-change was at least 3
+sigGenes_MLQQLQ <- rownames(deseq2ResDF_MLQQLQ.noNA[deseq2ResDF_MLQQLQ.noNA$padj <= adjP &
+            abs(deseq2ResDF_MLQQLQ.noNA$log2FoldChange) > LFC,])
+
+length(sigGenes_MLQQLQ)
+
+deseq2VST_MLQQLQ <- deseq2VST[deseq2VST$Gene %in% sigGenes_MLQQLQ,]
+
+
+# First compare wide vs long version
+deseq2VST_MLQQLQ_wide <- deseq2VST_MLQQLQ
+deseq2VST_MLQQLQ_long <- melt(deseq2VST_MLQQLQ, id.vars=c("Gene")) #needed for ggplot
+
+#print(deseq2VST_MLQQLQ_wide[1:5,1:7])
+#head(deseq2VST_MLQQLQ_long)
+
+
+###ONLY FLQ AND FLQ SAMPLES
+MLQQLQ_samplessubset <- rownames(sampleData[which(sampleData$tx_group=="MLQ" | sampleData$tx_group=="QLQ"),])
+#make empty dataframe for saving in the for loop
+deseq2VST_long_MLQQLQsubset <- data.frame()
+
+for (id in MLQQLQ_samplessubset) {
+  subset_id <- deseq2VST_MLQQLQ_long[deseq2VST_MLQQLQ_long$variable == id, ]  # Subset df by the current value of id
+  # at to the the subset dataframe each iteration
+  deseq2VST_long_MLQQLQsubset <- rbind(deseq2VST_long_MLQQLQsubset, subset_id)
+}
+
+#verifying status of data frame
+# Check if all ids in the variable column of the subsetted list are from the allowed id per the TX group used for the pairwise
+
+
+# Output the result
+invalid_names <- deseq2VST_long_MLQQLQsubset$variable[!deseq2VST_long_MLQQLQsubset$variable %in% MLQQLQ_samplessubset]
+if (length(invalid_names) > 0) {
+  print(paste("Invalid IDs in the DF:", paste(invalid_names, collapse = ", ")))
+} else {
+  print("All IDs in the DF are valid.")
+}
+
+```
+
+The significant gene does not reach the adjusted p-value of 0.01 and 3-fold change criteria. Not producing heatmap. For reference, the fold change was ~ -0.5 and adj p value was just below 0.05.
+
+<!-- ```{r makeheatmap_MLQQLQ, eval=FALSE, fig.height=3} -->
+<!-- # Make a heatmap -->
+<!-- ggplot(deseq2VST_long_MLQQLQsubset, aes(x=variable, y=Gene, fill=value)) +  -->
+<!--   geom_raster() +  -->
+<!--   scale_fill_viridis(trans="sqrt") +  -->
+<!--   theme(axis.text.x=element_text(angle=65, hjust=1),  -->
+<!--         axis.text.y=element_blank(),  -->
+<!--         axis.ticks.y=element_blank()) -->
+<!-- ``` -->
+
+<!-- ```{r clusteredheatmap_MLQQLQ, fig.height=3.5} -->
+<!-- # Convert the significant genes back to a atrix for clustering -->
+<!-- deseq2VSTMatrix_MLQQLQ <- dcast(deseq2VST_long_MLQQLQsubset, Gene ~ variable) -->
+<!-- rownames(deseq2VSTMatrix_MLQQLQ) <- deseq2VSTMatrix_MLQQLQ$Gene -->
+<!-- deseq2VSTMatrix_MLQQLQ$Gene <- NULL -->
+
+<!-- # Compute a distance calculation on both dimensions of the matrix -->
+<!-- #dist() computes the distance based on the rows of the df -->
+<!-- #in the current format, gives distance based on genes -->
+<!-- distanceGene_MLQQLQ <- dist(deseq2VSTMatrix_MLQQLQ) -->
+<!-- #transpose to get distance based on samples -->
+<!-- distanceSample_MLQQLQ <- dist(t(deseq2VSTMatrix_MLQQLQ)) -->
+
+<!-- # Cluster based on the distance calculations -->
+<!-- #hclust: hierarchical cluster -->
+<!-- clusterGene_MLQQLQ <- hclust(distanceGene_MLQQLQ, method="average") -->
+<!-- clusterSample_MLQQLQ <- hclust(distanceSample_MLQQLQ, method="average") -->
+
+<!-- #get specific colors by TX group: -->
+<!-- clustorder_MLQQLQ <- clusterSample_MLQQLQ$order -->
+<!-- color_vector_MLQQLQ <- vector("character", length(clustorder_MLQQLQ)) -->
+<!-- # Loop through each name in clustorder_MLQQLQ -->
+<!-- for (i in 1:length(clustorder_MLQQLQ)) { -->
+<!--   name <- clustorder_MLQQLQ[i] -->
+
+<!--   # Check if the name exists in rownames of sampleData and if the tx_group is "FLW" -->
+<!--   #GREATER THAN 7 BECAUSE FLQ COMES BEFORE MLQ IN SEQ INPUT -->
+<!--   if (name >= 7) { -->
+<!--     color_vector_MLQQLQ[i] <- "yellowgreen"  # Assign green if the name matches "FLW" in tx_group -->
+<!--   } else { -->
+<!--     color_vector_MLQQLQ[i] <- "purple1"   # Assign blue if the name does not match "FLW" -->
+<!--   } -->
+<!-- } -->
+
+
+
+<!-- color_vector_MLQQLQ_xcol <- c("yellowgreen","yellowgreen","yellowgreen","yellowgreen","purple1","purple1","yellowgreen","purple1","yellowgreen","purple1","purple1","purple1") -->
+
+<!-- color_vector_MLQQLQ == color_vector_MLQQLQ_xcol -->
+
+<!-- # Construct a dendogram for samples -->
+<!-- sampleModel_MLQQLQ <- as.dendrogram(clusterSample_MLQQLQ) -->
+<!-- sampleDendrogramData_MLQQLQ <- segment(dendro_data(sampleModel_MLQQLQ, type = "rectangle")) -->
+<!-- sampleDendrogram_MLQQLQ <- ggplot(sampleDendrogramData_MLQQLQ) +  -->
+<!--   geom_segment(aes(x = x, y = y, xend = xend, yend = yend)) +  -->
+<!--   theme_dendro() -->
+
+<!-- # Re-factor samples for ggplot2 -->
+<!-- #use to match dendogram -->
+<!-- deseq2VST_long_MLQQLQsubset$variable <- factor(deseq2VST_long_MLQQLQsubset$variable,levels=clusterSample_MLQQLQ$labels[clusterSample_MLQQLQ$order]) -->
+
+<!-- # Construct the heatmap. note that at this point we have only clustered the samples NOT the genes -->
+<!-- heatmap_MLQQLQ <- ggplot(deseq2VST_long_MLQQLQsubset, aes(x=variable, y=Gene, fill=value)) +  -->
+<!--   geom_raster() +  -->
+<!--   scale_fill_viridis(trans="sqrt") +  -->
+<!--   theme(axis.text.x=element_text(angle=65, hjust=1, color = color_vector_MLQQLQ_xcol), -->
+<!--         #axis.text.y=element_blank(),  -->
+<!--         axis.ticks.y=element_blank(), -->
+<!--         plot.margin = unit(c(-.75, 0, 0, 0), "cm")) -->
+
+<!-- # Combine the dendrogram and the heatmap -->
+<!-- #install.packages("gridExtra") -->
+<!-- plot_grid(sampleDendrogram_MLQQLQ, NULL, heatmap_MLQQLQ, NULL, align= "v", ncol=2, nrow=2, rel_heights = c(.3,1,1,1), rel_widths = c(2.7,.1,2.5,.1)) -->
+<!-- ``` -->
+
+
+
+# Get a Unique list of Differentially Expressed Genes
+```{r UniqueDEGlist}
+SigDEGs <- c(DEG_genelist_FLQMLQ, DEG_genelist_FLQQLQ, DEG_genelist_FLWFLQ,  DEG_genelist_FLWMLW, DEG_genelist_MLWMLQ, DEG_genelist_QLWQLQ)
+
+SigDEGsUnique <- unique(SigDEGs)
+write.table(SigDEGsUnique,"DEGGeneList/SigDEGsAcrossAllPWC.txt", row.names = FALSE, col.names = FALSE, quote=FALSE)
+
+# DEGs <- c(DEG_genelist_FLQMLQ, DEG_genelist_FLQQLQ, DEG_genelist_FLWFLQ,  DEG_genelist_FLWMLW, DEG_genelist_MLWMLQ, DEG_genelist_QLWQLQ)
+# 
+```
+
+
+
+
+# Save Data For Import Later
+```{r SAVE}
+save(DEG_genelist_FLQMLQ, DEG_genelist_FLQQLQ, DEG_genelist_FLWFLQ,  DEG_genelist_FLWMLW, DEG_genelist_MLWMLQ, DEG_genelist_QLWQLQ, file="BIMB_MB_DEGdataGeneLists.RData")
+
+save(deseq2ResDF_FLWFLQ.noNA, deseq2ResDF_MLWMLQ.noNA, deseq2ResDF_QLWQLQ.noNA, deseq2ResDF_FLWMLW.noNA, deseq2ResDF_FLQMLQ.noNA, deseq2ResDF_FLQQLQ.noNA, deseq2ResDF_MLQQLQ.noNA, file="BIMB_MB_DESeqDFsFull.RData")
+
+save(DEGs.FCdir_FLQMLQ, DEGs.FCdir_FLQQLQ, DEGs.FCdir_FLWFLQ, DEGs.FCdir_FLWMLW, DEGs.FCdir_MLWMLQ, DEGs.FCdir_QLWQLQ, file="BIMB_MB_DEGs_pLFC.RData")
+
+save(SigDEGs, SigDEGsUnique, file="BIMB_MB_SigDEGs.RData")
+
+```

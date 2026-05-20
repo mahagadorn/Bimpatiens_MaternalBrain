@@ -1,0 +1,58 @@
+---
+title: "BimpMB_MakingCountTable"
+author: "M.A. Hagadorn"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+##Library tximport
+
+```{r tximport, echo=FALSE}
+library(tximport)
+```
+
+## Import RSEM results into R
+Priscila Santos did all the post-sequencing preprocessing of the data getting it to counts. This import will bring the results for all samples into the R environment.
+```{r ImportbySampleGeneResults}
+#path to RSEM output files ".genes.results"
+#Notice, no slash after the foldername==if you have it there if give double slash below
+dir <- ("../RSEM_genes_counts_output")
+
+#sample names or the prefix in each file name - prefix.genes.results
+samples <- c("K23C051","K23D046","K23D047","K23D048","K23D079","K23D118","K23D127","K23D136","K23D139","K23D140","K23D142","K23D157","K23D158","K23D159","K23D169","K23D170","K23D187","K23D188","K23E032","K23E130","K23F037","K23F056","K23F057","K23F071","K23F091","K23F174","K23G039","K23G076","K23G101","K23G115","K23G124","K23H045","K23H103","K23H106","K23H107","K23H152")
+files <- file.path(dir, paste0(samples, ".genes.results"))
+names(files) <- samples
+
+
+#import the files for individual samples
+txi.rsem <- tximport(files, type = "rsem", txIn= FALSE, txOut = FALSE)
+txi.rsem$counts
+
+Bimp_MB_GeneCounts <- txi.rsem$counts
+```
+
+
+## Make Count Table
+```{r Counttable}
+Bimp_MB_GeneCounts <- txi.rsem$counts
+head(Bimp_MB_GeneCounts)
+
+#verifying the number of columns (i.e., samples)
+ncol(Bimp_MB_GeneCounts)
+
+#verify number of rows (i.e., genes)
+nrow(Bimp_MB_GeneCounts)
+```
+
+
+## Make Count Table
+```{r writecounttable}
+write.table(Bimp_MB_GeneCounts, file = "../Bimp_MB_GeneCountData.txt", sep = "")
+write.csv2(Bimp_MB_GeneCounts, file = "../Bimp_MB_GeneCountData.csv")
+```
+
+

@@ -1,0 +1,115 @@
+import glob
+import os
+
+# Input and output directories
+RAW_DIR = "/uufs/chpc.utah.edu/common/home/kapheim-group2/priscila/bimp_MAH_rnaseq/bombus_project/raw_data/"
+TRIMMED_DIR = "/uufs/chpc.utah.edu/common/home/kapheim-group2/priscila/bimp_MAH_rnaseq/bombus_project/cleaned_data/"
+QC_BEFORE_DIR = "/uufs/chpc.utah.edu/common/home/kapheim-group2/priscila/bimp_MAH_rnaseq/bombus_project/quality/raw_data/"
+QC_AFTER_DIR = "/uufs/chpc.utah.edu/common/home/kapheim-group2/priscila/bimp_MAH_rnaseq/bombus_project/quality/cleaned_data/"
+
+# Get all samples from the raw data directory
+SAMPLES, = glob_wildcards(RAW_DIR+"{id}_R1_001.fastq.gz")
+
+# Define the workflow
+rule all:
+    input:expand(QC_BEFORE_DIR+"{sample}_R1_001_fastqc.zip", sample = SAMPLES),expand(QC_BEFORE_DIR+"{sample}_R2_001_fastqc.zip", sample = SAMPLES), QC_BEFORE_DIR+"pre_quality_done", \
+expand(QC_BEFORE_DIR+"{sample}_R1_001_fastqc.html", sample = SAMPLES),expand(QC_BEFORE_DIR+"{sample}_R2_001_fastqc.html", sample = SAMPLES), \
+expand(TRIMMED_DIR+"{sample}_R1_paired.fastq.gz", sample = SAMPLES), expand(TRIMMED_DIR+"{sample}_R2_paired.fastq.gz", sample = SAMPLES), \
+expand(QC_AFTER_DIR+"{sample}_R1_paired_fastqc.zip", sample = SAMPLES),expand(QC_AFTER_DIR+"{sample}_R2_paired_fastqc.zip", sample = SAMPLES),QC_AFTER_DIR+"multiqc_report.html", \
+expand(QC_AFTER_DIR+"{sample}_R1_paired_fastqc.html", sample = SAMPLES),expand(QC_AFTER_DIR+"{sample}_R2_paired_fastqc.html", sample = SAMPLES)
+
+# Rule to run FastQC on raw data
+rule fastqc_raw:
+    input:
+        r1=RAW_DIR+"{sample}_R1_001.fastq.gz",
+        r2=RAW_DIR+"{sample}_R2_001.fastq.gz"
+    output:
+        r1_fastqc_zip=QC_BEFORE_DIR+"{sample}_R1_001_fastqc.zip",
+        r1_fastqc_html=QC_BEFORE_DIR+"{sample}_R1_001_fastqc.html",
+        r2_fastqc_zip=QC_BEFORE_DIR+"{sample}_R2_001_fastqc.zip",
+        r2_fastqc_html=QC_BEFORE_DIR+"{sample}_R2_001_fastqc.html"
+    resources: mem_mb = 9000
+    params:cpu = 3
+    shell:
+        """
+        module load fastqc/0.12.1
+        mkdir -p {QC_BEFORE_DIR}
+        fastqc {input.r1} {input.r2} -o {QC_BEFORE_DIR}
+        """
+
+# Rule to run MultiQC on raw data FastQC outputs
+rule multiqc_raw:
+    input:
+        expand(QC_BEFORE_DIR+"{sample}_R1_001_fastqc.html", sample=SAMPLES) +
+        expand(QC_BEFORE_DIR+"{sample}_R2_001_fastqc.html", sample=SAMPLES)
+    output:
+        QC_BEFORE_DIR+"pre_quality_done"
+    resources: mem_mb = 6000
+    params:cpu = 2
+    shell:
+        """
+        module load multiqc
+        multiqc {QC_BEFORE_DIR} -o {QC_BEFORE_DIR}
+        touch {QC_BEFORE_DIR}"pre_quality_done"
+        """
+
+# Rule to run Trimmomatic
+rule trimmomatic:
+    input:
+        r1=RAW_DIR+"{sample}_R1_001.fastq.gz",
+        r2=RAW_DIR+"{sample}_R2_001.fastq.gz"
+    output:
+        r1_paired=TRIMMED_DIR+"{sample}_R1_paired.fastq.gz",
+        r1_unpaired=TRIMMED_DIR+"{sample}_R1_unpaired.fastq.gz",
+        r2_paired=TRIMMED_DIR+"{sample}_R2_paired.fastq.gz",
+        r2_unpaired=TRIMMED_DIR+"{sample}_R2_unpaired.fastq.gz"
+    resources: mem_mb = 12000
+    params:
+        trimmomatic_jar="/uufs/chpc.utah.edu/common/home/u6021652/Trimmomatic-0.39/trimmomatic-0.39.jar",
+        trimmomatic_adapters="/uufs/chpc.utah.edu/common/home/u6021652/Trimmomatic-0.39/adapters/custom.fa",
+        cpu = 4
+    shell:
+        """
+        mkdir -p {TRIMMED_DIR}
+        java -jar {params.trimmomatic_jar} PE -phred33 \
+            {input.r1} {input.r2} \
+            {output.r1_paired} {output.r1_unpaired} \
+            {output.r2_paired} {output.r2_unpaired} \
+            ILLUMINACLIP:{params.trimmomatic_adapters}:2:30:10 \
+            CROP:145 LEADING:3 TRAILING:3 SLIDINGWINDOW:4:25 MINLEN:50
+        """
+
+# Rule to run FastQC on trimmed data
+rule fastqc_trimmed:
+    input:
+        r1=TRIMMED_DIR+"{sample}_R1_paired.fastq.gz",
+        r2=TRIMMED_DIR+"{sample}_R2_paired.fastq.gz"
+    output:
+        r1_fastqc_zip=QC_AFTER_DIR+"{sample}_R1_paired_fastqc.zip",
+        r1_fastqc_html=QC_AFTER_DIR+"{sample}_R1_paired_fastqc.html",
+        r2_fastqc_zip=QC_AFTER_DIR+"{sample}_R2_paired_fastqc.zip",
+        r2_fastqc_html=QC_AFTER_DIR+"{sample}_R2_paired_fastqc.html"
+    resources: mem_mb = 9000
+    params:cpu = 3
+    shell:
+        """
+        mkdir -p {QC_AFTER_DIR}
+        module load fastqc/0.12.1
+        fastqc {input.r1} {input.r2} -o {QC_AFTER_DIR}
+        """
+
+# Rule to run MultiQC on trimmed data FastQC outputs
+rule multiqc_trimmed:
+    input:
+        expand(QC_AFTER_DIR+"{sample}_R1_paired_fastqc.html", sample=SAMPLES) +
+        expand(QC_AFTER_DIR+"{sample}_R2_paired_fastqc.html", sample=SAMPLES)
+    output:
+        QC_AFTER_DIR+"multiqc_report.html"
+    resources: mem_mb = 6000
+    params:cpu = 2
+    shell:
+        """
+        module load multiqc
+        multiqc {QC_AFTER_DIR} -o {QC_AFTER_DIR}
+        """
+

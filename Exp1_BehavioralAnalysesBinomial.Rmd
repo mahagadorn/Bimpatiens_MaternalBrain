@@ -1,0 +1,583 @@
+---
+title: "Maternal Brain: analyses of proportion data by behavior (caste*day)"
+author: "M.A. Hagadorn"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 2
+editor_options: 
+  chunk_output_type: console
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	warning = TRUE,
+	background = "#F7F7F7",
+	highlight = TRUE)
+```
+
+## Load in Required Packages
+
+```{r packages, echo=FALSE, warning=FALSE, message=FALSE}
+library(knitr)
+library(plyr)
+library(dplyr)
+library(Rmisc)
+library(ggplot2)
+library(stats)
+library(nortest)
+library(MASS)
+library(here)
+library(pwr) #power analysis
+library(effectsize)
+library(rcompanion) #plotNormalDensity
+library(lme4) #glmer
+
+installed.packages()[names(sessionInfo()$otherPkgs), "Version"]
+```
+
+
+# Individual Behaviors: Caste * DayGrouping
+## Load in Data: individual behaviors proportion
+```{r loaddata, include=FALSE}
+#read in data
+#data set only contains 'no manipulation' queens and workers
+#NO FOSTER DATA INCLUDED
+behavior_prop <- read.csv2("G:/DesktopDocuments/Documents/PHD/Manuscripts/Bee/Bimp_MaternalBrainVolumetric/BehaviorData/BehaviorData_ProportionData_INDxT.csv", sep=",", stringsAsFactors = FALSE)
+print(str(behavior_prop))
+
+#assign data columns as numeric
+numb_cols <- c(6:18)
+behavior_prop[,numb_cols] <- apply(behavior_prop[ , numb_cols], 2, function(x) as.numeric(x))
+
+#Assign factors
+behavior_prop$colony <- factor(behavior_prop$colony)
+behavior_prop$caste <- factor(behavior_prop$caste)
+behavior_prop$DayGrouping <- factor(behavior_prop$DayGrouping)
+
+print(str(behavior_prop))
+```
+
+
+## Larval Feeding
+### Summary Statistics
+```{r ss_LF}
+ss_LF <- summarySE(behavior_prop,
+                          measurevar = "LF",
+                          groupvars = c("caste","DayGrouping"))
+kable(ss_LF)
+```
+
+
+### Generalized Linear Model (BIONOMIAL)
+```{r AOD_LF}
+#mixed model to check for colony effect
+summary(glmer(LF~caste*DayGrouping + (1|colony), data=behavior_prop, family=binomial(link = "logit")))
+
+#no effect of colony
+
+#linear models
+AOD_LF.intx <- glm(LF~caste*DayGrouping, data=behavior_prop, family=binomial(link = "logit"))
+AOD_LF <- glm(LF~caste+DayGrouping, data=behavior_prop, family=binomial(link = "logit"))
+LF <- glm(LF~caste, data=behavior_prop, family=binomial(link = "logit"))
+
+####
+#now lets compare models to see what the best fit is.
+anova(AOD_LF.intx, AOD_LF, LF)
+
+#model with the lowest ACI should be used
+#if difference is less than 2.0, then go with simpler
+AIC(AOD_LF.intx, AOD_LF, LF)
+
+#AIC for no interaction is lower
+#most appropriate model is no interaction
+
+# summary(AOD_LF)
+# anova(AOD_LF, test="Chisq")
+summary(LF)
+```
+
+
+
+## Pollen Feeding
+### Summary Statistics
+```{r ss_PF}
+ss_PF <- summarySE(behavior_prop,
+                          measurevar = "PF",
+                          groupvars = c("caste","DayGrouping"))
+kable(ss_PF)
+```
+
+
+### Generalized Linear Model (BIONOMIAL)
+```{r AOD_PF}
+#mixed model to check for colony effect
+summary(glmer(PF~caste*DayGrouping + (1|colony), data=behavior_prop, family=binomial(link = "logit")))
+
+#no effect of colony
+
+#linear models
+AOD_PF.intx <- glm(PF~caste*DayGrouping, data=behavior_prop, family=binomial(link = "logit"))
+AOD_PF <- glm(PF~caste+DayGrouping, data=behavior_prop, family=binomial(link = "logit"))
+PF <- glm(PF~caste, data=behavior_prop, family=binomial(link = "logit"))
+
+####
+#now lets compare models to see what the best fit is.
+anova(AOD_PF.intx, AOD_PF, PF)
+
+#model with the lowest ACI should be used
+#if difference is less than 2.0, then go with simpler
+AIC(AOD_PF.intx, AOD_PF, PF)
+
+#AIC for no interaction is lower
+#most appropriate model is no interaction
+
+
+summary(PF)
+
+```
+
+
+
+
+## Drinking Sugar Water
+### Summary Statistics
+```{r ss_DS}
+ss_DS <- summarySE(behavior_prop,
+                          measurevar = "DS",
+                          groupvars = c("caste","DayGrouping"))
+kable(ss_DS)
+```
+
+
+### Generalized Linear Model (BIONOMIAL)
+```{r AOD_DS}
+#mixed model to check for colony effect
+summary(glmer(DS~caste*DayGrouping + (1|colony), data=behavior_prop, family=binomial(link = "logit")))
+
+#no effect of colony
+
+#linear models
+AOD_DS.intx <- glm(DS~caste*DayGrouping, data=behavior_prop, family=binomial(link = "logit"))
+AOD_DS <- glm(DS~caste+DayGrouping, data=behavior_prop, family=binomial(link = "logit"))
+DS <- glm(DS~caste, data=behavior_prop, family=binomial(link = "logit"))
+####
+#now lets compare models to see what the best fit is.
+anova(AOD_DS.intx, AOD_DS, DS)
+
+#model with the lowest ACI should be used
+#if difference is less than 2.0, then go with simpler
+AIC(AOD_DS.intx, AOD_DS, DS)
+
+#AIC for no interaction is lower
+#most appropriate model is no interaction
+
+
+# summary(AOD_DS)
+summary(DS)
+
+```
+
+
+
+
+
+## Incubation
+### Summary Statistics
+```{r ss_ICB}
+ss_ICB <- summarySE(behavior_prop,
+                          measurevar = "ICB",
+                          groupvars = c("caste","DayGrouping"))
+kable(ss_ICB)
+```
+
+
+### Generalized Linear Model (BIONOMIAL)
+```{r AOD_ICB}
+#mixed model to check for colony effect
+summary(glmer(ICB~caste*DayGrouping + (1|colony), data=behavior_prop, family=binomial(link = "logit")))
+
+#no effect of colony
+
+#linear models
+AOD_ICB.intx <- glm(ICB~caste*DayGrouping, data=behavior_prop, family=binomial(link = "logit"))
+AOD_ICB <- glm(ICB~caste+DayGrouping, data=behavior_prop, family=binomial(link = "logit"))
+ICB <- glm(ICB~caste, data=behavior_prop, family=binomial(link = "logit"))
+
+####
+#now lets compare models to see what the best fit is.
+anova(AOD_ICB.intx, AOD_ICB)
+anova(AOD_ICB, ICB)
+
+#model with the lowest ACI should be used
+#if difference is less than 2.0, then go with simpler
+AIC(AOD_ICB.intx, AOD_ICB, ICB)
+
+#within 2.0; going with simplier model
+#most appropriate model is no interaction
+
+# 
+# summary(AOD_ICB)
+summary(ICB)
+
+```
+
+
+
+
+
+## Inspecting
+### Summary Statistics
+```{r ss_INS}
+ss_INS <- summarySE(behavior_prop,
+                          measurevar = "INS",
+                          groupvars = c("caste","DayGrouping"))
+kable(ss_INS)
+```
+
+
+### Generalized Linear Model (BIONOMIAL)
+```{r AOD_INS}
+#mixed model to check for colony effect
+#summary(glmer(INS ~ caste*DayGrouping + (1|colony), data=behavior_prop, family=binomial(link = "logit")))
+###Complete separation because of 0 and 1.0
+
+#no effect of colony
+
+#linear models
+AOD_INS.intx <- glm(INS~caste*DayGrouping, data=behavior_prop, family=binomial(link = "logit"))
+AOD_INS <- glm(INS~caste+DayGrouping, data=behavior_prop, family=binomial(link = "logit"))
+INS <- glm(INS~caste, data=behavior_prop, family=binomial(link = "logit"))
+
+####
+#now lets compare models to see what the best fit is.
+anova(AOD_INS.intx, AOD_INS)
+
+#model with the lowest ACI should be used
+#if difference is less than 2.0, then go with simpler
+AIC(AOD_INS.intx, AOD_INS, INS)
+
+#AIC is lower for the no interactoin model
+#most appropriate model is no interaction
+
+
+# summary(AOD_INS)
+summary(INS)
+
+```
+
+
+
+
+## Manipulating Wax
+### Summary Statistics
+```{r ss_MW}
+ss_MW <- summarySE(behavior_prop,
+                          measurevar = "MW",
+                          groupvars = c("caste","DayGrouping"))
+kable(ss_MW)
+```
+
+
+### Generalized Linear Model (BIONOMIAL)
+```{r AOD_MW}
+#mixed model to check for colony effect
+summary(glmer(MW ~ caste*DayGrouping + (1|colony), data=behavior_prop, family=binomial(link = "logit")))
+
+
+#no effect of colony
+
+#linear models
+AOD_MW.intx <- glm(MW~caste*DayGrouping, data=behavior_prop, family=binomial(link = "logit"))
+AOD_MW <- glm(MW~caste+DayGrouping, data=behavior_prop, family=binomial(link = "logit"))
+MW <- glm(MW~caste, data=behavior_prop, family=binomial(link = "logit"))
+
+####
+#now lets compare models to see what the best fit is.
+anova(AOD_MW.intx, AOD_MW)
+
+#model with the lowest ACI should be used
+#if difference is less than 2.0, then go with simpler
+AIC(AOD_MW.intx, AOD_MW, MW)
+
+#AIC is lower for the no interaction model
+#most appropriate model is no interaction
+
+
+# summary(AOD_MW)
+summary(MW)
+
+```
+
+
+
+
+
+## Perching
+### Summary Statistics
+```{r ss_PER}
+ss_PER <- summarySE(behavior_prop,
+                          measurevar = "PER",
+                          groupvars = c("caste","DayGrouping"))
+kable(ss_PER)
+```
+
+
+### Generalized Linear Model (BIONOMIAL)
+```{r AOD_PER}
+#mixed model to check for colony effect
+summary(glmer(PER ~ caste*DayGrouping + (1|colony), data=behavior_prop, family=binomial(link = "logit")))
+
+
+#no effect of colony
+
+#linear models
+AOD_PER.intx <- glm(PER~caste*DayGrouping, data=behavior_prop, family=binomial(link = "logit"))
+AOD_PER <- glm(PER~caste+DayGrouping, data=behavior_prop, family=binomial(link = "logit"))
+PER <- glm(PER~caste, data=behavior_prop, family=binomial(link = "logit"))
+
+####
+#now lets compare models to see what the best fit is.
+anova(AOD_PER.intx, AOD_PER)
+
+#model with the lowest ACI should be used
+#if difference is less than 2.0, then go with simpler
+AIC(AOD_PER.intx, AOD_PER, PER)
+
+#AIC is lower for the no interaction model
+#most appropriate model is no interaction
+
+
+#summary(AOD_PER)
+summary(PER)
+```
+
+
+
+
+## Buzzing
+### Summary Statistics
+```{r ss_BZ}
+ss_BZ <- summarySE(behavior_prop,
+                          measurevar = "BZ",
+                          groupvars = c("caste","DayGrouping"))
+kable(ss_BZ)
+```
+
+No occurrences, no analysis.
+
+
+
+## Patrolling
+### Summary Statistics
+```{r ss_PAT}
+ss_PAT <- summarySE(behavior_prop,
+                          measurevar = "PAT",
+                          groupvars = c("caste","DayGrouping"))
+kable(ss_PAT)
+```
+
+### Generalized Linear Model (BIONOMIAL)
+```{r AOD_PAT}
+#mixed model to check for colony effect
+summary(glmer(PAT ~ caste*DayGrouping + (1|colony), data=behavior_prop, family=binomial(link = "logit")))
+
+
+#no effect of colony
+
+#linear models
+AOD_PAT.intx <- glm(PAT~caste*DayGrouping, data=behavior_prop, family=binomial(link = "logit"))
+AOD_PAT <- glm(PAT~caste+DayGrouping, data=behavior_prop, family=binomial(link = "logit"))
+PAT <- glm(PAT~caste, data=behavior_prop, family=binomial(link = "logit"))
+
+####
+#now lets compare models to see what the best fit is.
+anova(AOD_PAT.intx, AOD_PAT,  test="Chisq")
+
+#model with the lowest ACI should be used
+#if difference is less than 2.0, then go with simpler
+AIC(AOD_PAT.intx, AOD_PAT, PAT)
+
+#AIC is lower for the no interaction model
+#most appropriate model is no interaction
+
+
+summary(PAT)
+
+```
+
+
+
+
+## Fanning
+### Summary Statistics
+```{r ss_FAN}
+ss_FAN <- summarySE(behavior_prop,
+                          measurevar = "FAN",
+                          groupvars = c("caste","DayGrouping"))
+kable(ss_FAN)
+```
+
+No occurrences, no analysis.
+
+
+
+
+## Egg-laying
+### Summary Statistics
+```{r ss_EL}
+ss_EL <- summarySE(behavior_prop,
+                          measurevar = "EL",
+                          groupvars = c("caste","DayGrouping"))
+kable(ss_EL)
+```
+
+### Generalized Linear Model (BIONOMIAL)
+```{r AOD_EL}
+#mixed model to check for colony effect
+summary(glmer(EL ~ caste*DayGrouping + (1|colony), data=behavior_prop, family=binomial(link = "logit")))
+
+
+#no effect of colony
+
+#linear models
+AOD_EL.intx <- glm(EL~caste*DayGrouping, data=behavior_prop, family=binomial(link = "logit"))
+AOD_EL <- glm(EL~caste+DayGrouping, data=behavior_prop, family=binomial(link = "logit"))
+EL <- glm(EL~caste, data=behavior_prop, family=binomial(link = "logit"))
+
+####
+#now lets compare models to see what the best fit is.
+anova(AOD_EL.intx, AOD_EL,  test="Chisq")
+
+#model with the lowest ACI should be used
+#if difference is less than 2.0, then go with simpler
+AIC(AOD_EL.intx, AOD_EL, EL)
+
+#AIC is lower for the no interaction model
+#most appropriate model is no interaction
+
+
+summary(EL)
+
+```
+
+
+
+## Inactivity
+### Summary Statistics
+```{r ss_IA}
+ss_IA <- summarySE(behavior_prop,
+                          measurevar = "IA",
+                          groupvars = c("caste","DayGrouping"))
+kable(ss_IA)
+```
+
+No occurrences, no analysis.
+
+
+
+
+## Other
+### Summary Statistics
+```{r ss_OTH}
+ss_OTH <- summarySE(behavior_prop,
+                          measurevar = "OTH",
+                          groupvars = c("caste","DayGrouping"))
+kable(ss_OTH)
+```
+
+### Generalized Linear Model (BIONOMIAL)
+```{r AOD_OTH}
+#mixed model to check for colony effect
+summary(glmer(OTH ~ caste*DayGrouping + (1|colony), data=behavior_prop, family=binomial(link = "logit")))
+
+
+#no effect of colony
+
+#linear models
+AOD_OTH.intx <- glm(OTH~caste*DayGrouping, data=behavior_prop, family=binomial(link = "logit"))
+AOD_OTH <- glm(OTH~caste+DayGrouping, data=behavior_prop, family=binomial(link = "logit"))
+OTH <- glm(OTH~caste, data=behavior_prop, family=binomial(link = "logit"))
+
+####
+#now lets compare models to see what the best fit is.
+anova(AOD_OTH.intx, AOD_OTH,  test="F")
+
+#model with the lowest ACI should be used
+#if difference is less than 2.0, then go with simpler
+AIC(AOD_OTH.intx, AOD_OTH, OTH)
+
+#AIC is lower for the no interaction model
+#most appropriate model is no interaction
+
+
+summary(OTH)
+
+```
+
+
+
+
+
+
+
+
+# On Brood Proportion: Caste * DayGrouping
+## Load in Data: on brood proportion
+```{r loaddata.onbroodprop, include=FALSE}
+#read in data
+#data set only contains 'no manipulation' queens and workers
+#NO FOSTER DATA INCLUDED
+behavior_prop_onbrood <- read.csv2("G:/DesktopDocuments/Documents/PHD/Manuscripts/Bee/Bimp_MaternalBrainVolumetric/BehaviorData/BehaviorData_ProportionData_OnbroodOccurences.csv", sep=",", stringsAsFactors = FALSE)
+print(str(behavior_prop_onbrood))
+
+#assign data columns as numeric
+numb_cols <- c(6:7)
+behavior_prop_onbrood[,numb_cols] <- apply(behavior_prop_onbrood[ , numb_cols], 2, function(x) as.numeric(x))
+
+#Assign factors
+behavior_prop_onbrood$colony <- factor(behavior_prop_onbrood$colony)
+behavior_prop_onbrood$caste <- factor(behavior_prop_onbrood$caste)
+behavior_prop_onbrood$DayGrouping <- factor(behavior_prop_onbrood$DayGrouping)
+
+print(str(behavior_prop_onbrood))
+```
+
+## On brood proportion analysis
+### Summary Statistics
+```{r ss_Onbrood}
+ss_LF <- summarySE(behavior_prop_onbrood,
+                          measurevar = "onbrood",
+                          groupvars = c("caste","DayGrouping"))
+kable(ss_LF)
+```
+
+
+### Generalized Linear Model (BIONOMIAL)
+```{r AOD_Onbrood}
+#mixed model to check for colony effect
+summary(glmer(onbrood~caste*DayGrouping + (1|colony), data=behavior_prop_onbrood, family=binomial(link = "logit")))
+
+#no effect of colony
+
+#linear models
+AOD_onbrood.intx <- glm(onbrood~caste*DayGrouping, data=behavior_prop_onbrood, family=binomial(link = "logit"))
+AOD_onbrood <- glm(onbrood~caste+DayGrouping, data=behavior_prop_onbrood, family=binomial(link = "logit"))
+onbrood <- glm(onbrood~caste, data=behavior_prop_onbrood, family=binomial(link = "logit"))
+
+####
+#now lets compare models to see what the best fit is.
+anova(AOD_onbrood.intx, AOD_onbrood,  test="Chisq")
+
+#model with the lowest ACI should be used
+#if difference is less than 2.0, then go with simpler
+AIC(AOD_onbrood.intx, AOD_onbrood, onbrood)
+
+#AIC for no interaction is lower
+#most appropriate model is no interaction
+
+
+summary(onbrood)
+
+```
